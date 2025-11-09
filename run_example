@@ -1,0 +1,1 @@
+utils/scripts/runTestRIG.py  -a manual --implementation-A-host  xxx.yyy.com --implementation-A-port 6000 -b sail --implementation-B-log sail_trace.log -r rv32ecZifencei_Xcheriot --test-include-regex '^caparith$' --no-shrink --continue-on-fail -n 100 --force-rvfi-v1
