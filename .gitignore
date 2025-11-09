@@ -1,1 +1,12 @@
+# Ignore trace files not in the smoke-tests directory
 *.S
+!smoke-tests/*.S
+
+# ignore log files and build artefacts
+*.log
+logs/
+build/
+
+# Ignore raw and HTML-formatted Sail coverage files
+sail_coverage*
+*.html

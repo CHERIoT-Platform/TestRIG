@@ -1,9 +1,6 @@
 [submodule "BSV-RVFI-DII"]
         path = utils/BSV-RVFI-DII
         url = https://github.com/CTSRD-CHERI/BSV-RVFI-DII.git
-[submodule "RVBS"]
-	path = riscv-implementations/RVBS
-	url = https://github.com/CTSRD-CHERI/RVBS.git
 [submodule "sail-riscv"]
 	path = riscv-implementations/sail-riscv
 	url = https://github.com/rems-project/sail-riscv.git
