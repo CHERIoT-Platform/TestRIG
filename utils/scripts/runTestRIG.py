@@ -97,11 +97,13 @@ known_architectures = sorted(set([e0 + e1 + e2 + e3 + e4 + e5 + e6 + e7 + e8
                                   for e6 in std_ext("c")
                                   for e7 in std_ext("n")
                                   for e8 in multi_letter_exts]
-                                 + [e0 + e1 + e2 + e3
+                                 + [e0 + e1 + e2 + e3 + e4
                                     for e0 in ["rv32g", "rv64g"]
                                     for e1 in std_ext("c")
                                     for e2 in std_ext("n")
-                                    for e3 in x_ext("cheri")]
+                                    for e3 in z_ext("ifencei")
+                                    for e4 in x_ext("cheri")]
+                                 + ["rv32ecZifencei_Xcheriot"]
                                  ))
 #print(known_architectures)
 known_generators = {'internal', 'sail', 'manual'}
@@ -166,7 +168,7 @@ parser.add_argument('--path-to-toooba', metavar='PATH', type=str,
   default=op.join(implementations_path, "Toooba/builds/RV64ACDFIMSUxCHERI_Toooba_RVFI_DII_bluesim/exe_HW_sim"),
   help="The PATH to the Toooba executable")
 parser.add_argument('--path-to-ibex', metavar='PATH', type=str,
-  default=op.join(implementations_path, "ibex/verilator/obj_dir/Vibex_core_avalon"),
+  default=None,
   help="The PATH to the Ibex executable")
 parser.add_argument('--path-to-muntjac', metavar='PATH', type=str,
   default=op.join(implementations_path, "muntjac/bin/muntjac_core"),
@@ -181,7 +183,7 @@ parser.add_argument('-r', '--architecture', type=str.lower, metavar='ARCH', choi
   default='rv32i',
   help="""The architecture to verify, where ARCH is a non case sensitive string
   of the form 'rv{32,64}g[c][n]', or 'rv{32,64}i[m][a][f][d][n]' optionally followed
-  by an '_'-separated list of one or more of {Zicsr, Zifencei, Xcheri}
+  by an '_'-separated list of one or more of {Zicsr, Zifencei, Xcheri, xcheriot}
   appearing in that order (e.g. rv64ifcXcheri, rv64imd,
   rv32imafZicsr_Zifencei_Xcheri ...)""")
 parser.add_argument('--verification-archstring', type=str.lower, metavar='ARCH',
@@ -220,13 +222,17 @@ parser.add_argument('--strict-comparison', action='count', default=0,
 parser.add_argument('--no-shrink', action='count', default=0,
   help="Disable VEngine test case shrinking")
 parser.add_argument('--no-save', action='count', default=0,
-  help="Don't ask to save files")
+  help="Don't save failures")
+parser.add_argument('--save-all', action='count', default=0,
+  help="Save all traces, not just failures")
 parser.add_argument('--continue-on-fail', action='count', default=0,
   help="Continue when encountering a failure")
 parser.add_argument('--test-len', metavar='LEN', default=None, type=auto_int,
   help="Tell vengine to generate tests up to LEN instructions long")
 parser.add_argument('--supported-features', metavar='FEAT', type=str,
   help="Specify supported features to vengine, separated by '_'. Each feature should begin with 'X'.")
+parser.add_argument('--force-rvfi-v1', action='count', default=0,
+  help="Ignore RVFI version negotiation, specify original 'V1' interface")
 
 # Use argcomplete to provide bash tab completion (https://github.com/kislyuk/argcomplete)
 try:
@@ -256,6 +262,10 @@ class ISA_Configuration:
     return self.has("cheri")
 
   @property
+  def has_cheriot(self):
+    return self.has("cheriot")
+
+  @property
   def has_icsr(self):
     return self.has("icsr")
 
@@ -276,7 +286,7 @@ class ISA_Configuration:
     self.std_extensions = parts[0][4:]
     self.ext_map = {}
     for letter in self.std_extensions:
-      if letter in ('i', 'm', 's', 'a', 'f', 'd', 'c', 'n'):
+      if letter in ('i', 'm', 's', 'a', 'f', 'd', 'c', 'n', 'e'):
         self.ext_map[letter] = True
       elif letter == 'g':
         # G enables imafd+icsr+ihpm+ifencei
@@ -288,7 +298,7 @@ class ISA_Configuration:
         exit(-1)
     self.extensions = parts[1:]
     for extension in self.extensions:
-      if extension in ('icsr', 'ifencei', 'ihpm', 'cheri'):
+      if extension in ('icsr', 'ifencei', 'ihpm', 'cheri', 'cheriot'):
         self.ext_map[extension] = True
       else:
         print("ERROR: Extension "+extension+" not currently supported")
@@ -302,6 +312,8 @@ class ISA_Configuration:
       result += "rv64"
     if self.has("i"):
       result += "I"
+    elif self.has("e"):
+      result += "E"
     if self.has("c"):
       result += "C"
     if self.has("m"):
@@ -321,6 +333,8 @@ class ISA_Configuration:
       result += "Zifencei"
     if self.has_cheri:
       result += "Xcheri"
+    elif self.has_cheriot:
+      result += "Xcheriot"
     result += "-rvfi-dii"
     return result
 
@@ -390,7 +404,7 @@ class ISA_Configuration:
     #  print("ERROR: Sail currently does not support CSRs.")
     #  exit(-1)
     #TODO check if there are other configurations that Sail does not yet support and throw an error.
-    if self.has_cheri:
+    if self.has_cheri or self.has_cheriot:
       result = "cheri_" + result
     if self.has_xlen_32:
       result += "_RV32"
@@ -483,10 +497,14 @@ def spawn_rvfi_dii_server(name, port, log, isa_def):
   ##############################################################################
   elif name == 'sail':
     if args.path_to_sail_riscv_dir is None:
-      args.path_to_sail_riscv_dir = op.join(implementations_path, "sail-")
-      if isa_def.has_cheri:
-        args.path_to_sail_riscv_dir += "cheri-"
-      args.path_to_sail_riscv_dir += "riscv/c_emulator/"
+      args.path_to_sail_riscv_dir = implementations_path
+      if isa_def.has_cheriot:
+        args.path_to_sail_riscv_dir = op.join(args.path_to_sail_riscv_dir, "cheriot-sail")
+      elif isa_def.has_cheri:
+        args.path_to_sail_riscv_dir = op.join(args.path_to_sail_riscv_dir, "sail-cheri-riscv")
+      else:
+        args.path_to_sail_riscv_dir = op.join(args.path_to_sail_riscv_dir, "sail-riscv")
+      args.path_to_sail_riscv_dir = op.join(args.path_to_sail_riscv_dir, "c_emulator")
     full_sail_sim = op.join(op.dirname(op.realpath(__file__)), args.path_to_sail_riscv_dir, isa_def.get_sail_name())
     cmd = [full_sail_sim]
     if not isa_def.has("c"):
@@ -498,9 +516,17 @@ def spawn_rvfi_dii_server(name, port, log, isa_def):
     #cmd += ["--rvfi-dii", str(port)]
     cmd += ["-r", str(port)]
     cmd += ["-i"]
+    if args.verbosity >= 3:
+      cmd += ["-v"]
   ##############################################################################
   elif name == 'ibex':
-    cmd = [args.path_to_ibex, 'localhost', str(port)]
+    if args.path_to_ibex is None:
+      if isa_def.has_cheriot:
+        build_path = op.join(testrig_root_path, "build")
+        args.path_to_ibex = op.join(build_path, "lowrisc_ibex_cheriot_testrig_0/default-verilator/Vibex_top_sram")
+      else:
+        args.path_to_ibex = op.join(implementations_path, "ibex/verilator/obj_dir/Vibex_core_avalon")
+    cmd = [args.path_to_ibex, 'localhost', str(port), "1"]
   ##############################################################################
   elif name == 'muntjac':
     env2["RVFI_DII_PORT"] = str(port)
@@ -572,6 +598,8 @@ def spawn_vengine(name, mport, iport, arch, log, more_args=[]):
       relaxed = False
     if args.no_save:
       cmd += ['--no-save']
+    if args.save_all:
+      cmd += ['--save-all']
     if args.continue_on_fail:
       cmd += ['--continue-on-fail']
     if args.test_len:
@@ -588,6 +616,8 @@ def spawn_vengine(name, mport, iport, arch, log, more_args=[]):
       cmd += ['--single-implementation']
     if not relaxed:
       cmd += ['--strict-comparison']
+    if args.force_rvfi_v1:
+      cmd += ['--force-rvfi-v1']
     print("running qcvengine as: ", " ".join(cmd))
     if log is None:
       p = sub.Popen(cmd)

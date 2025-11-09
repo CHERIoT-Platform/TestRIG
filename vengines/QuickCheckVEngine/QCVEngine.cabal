@@ -1,0 +1,68 @@
+name:                QCVEngine
+version:             0.1.0.0
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+executable QCVEngine
+  hs-source-dirs:      src
+  main-is:             QuickCheckVEngine/Main.hs
+  other-modules:       InstrCodec,
+                       RISCV,
+                       RISCV.Helpers,
+                       RISCV.ArchDesc,
+                       RISCV.InstInspect,
+                       RISCV.RV32_I,
+                       RISCV.RV32_M,
+                       RISCV.RV32_A,
+                       RISCV.RV32_F,
+                       RISCV.RV32_D,
+                       RISCV.RV32_Zifencei,
+                       RISCV.RV32_Zicsr,
+                       RISCV.RV32_Xcheri,
+                       RISCV.RV64_I,
+                       RISCV.RV64_M,
+                       RISCV.RV64_A,
+                       RISCV.RV64_F,
+                       RISCV.RV64_D,
+                       RISCV.RV_C,
+                       RISCV.RV_CSRs,
+                       RISCV.HPMEvents,
+                       QuickCheckVEngine.Instrlike,
+                       QuickCheckVEngine.MainHelpers,
+                       QuickCheckVEngine.RVFI_DII,
+                       QuickCheckVEngine.RVFI_DII.RVFI,
+                       QuickCheckVEngine.RVFI_DII.DII,
+                       QuickCheckVEngine.TestTypes,
+                       QuickCheckVEngine.Test,
+                       QuickCheckVEngine.Template,
+                       QuickCheckVEngine.Templates.Utils,
+                       QuickCheckVEngine.Templates.Utils.General,
+                       QuickCheckVEngine.Templates.Utils.FP,
+                       QuickCheckVEngine.Templates.Utils.HPM,
+                       QuickCheckVEngine.Templates.Utils.CHERI,
+                       QuickCheckVEngine.Templates.Utils.Compressed,
+                       QuickCheckVEngine.Templates.GenArithmetic,
+                       QuickCheckVEngine.Templates.GenControlFlow,
+                       QuickCheckVEngine.Templates.GenMemory,
+                       QuickCheckVEngine.Templates.GenMulDiv,
+                       QuickCheckVEngine.Templates.GenCompressed,
+                       QuickCheckVEngine.Templates.GenAtomics,
+                       QuickCheckVEngine.Templates.GenFP,
+                       QuickCheckVEngine.Templates.GenHPM,
+                       QuickCheckVEngine.Templates.GenCSRs,
+                       QuickCheckVEngine.Templates.GenCHERI,
+                       QuickCheckVEngine.Templates.GenInterrupt,
+                       QuickCheckVEngine.Templates.GenAll,
+                       QuickCheckVEngine.Templates.GenTransExec,
+                       QuickCheckVEngine.Templates.RandomTest
+  other-extensions:    FlexibleInstances, MultiParamTypeClasses,
+                       FunctionalDependencies, OverloadedStrings,
+                       ScopedTypeVariables
+  build-depends:       base >=4.9, time, split >=0.2, regex-posix >=0.95,
+                       binary >=0.8, bitwise >=1.0, network >=2.8, parsec,
+                       bytestring >=0.10, filemanip >=0.3, splitmix >= 0.1.0.2,
+                       basement >= 0.0.10, QuickCheck >= 2.12 && < 2.15,
+                       regex-tdfa >= 1.3, pretty-diff >= 0.4,
+                       data-default >= 0.7, text >= 1.2
+  default-language:    Haskell2010
