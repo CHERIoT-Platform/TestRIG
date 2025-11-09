@@ -14,3 +14,6 @@
 [submodule "riscv-implementations/cheriot-ibex"]
 	path = riscv-implementations/cheriot-ibex
 	url = https://github.com/microsoft/cheriot-ibex.git
+[submodule "riscv-implementations/cheriot-kudu"]
+	path = riscv-implementations/cheriot-kudu
+	url = https://github.com/microsoft/cheriot-kudu.git
