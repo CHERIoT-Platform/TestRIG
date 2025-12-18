@@ -5,12 +5,12 @@ This is a quick introduction on how to use TestRIG for CHERIoT design verificati
 1. Clone this repo and get all submodules.
 
 2. Build the cheriot-sail (RFVI version) simulator.
-   - This should generate a executable at riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32
-   ```
-   cd riscv-implementations
-   make rvfi
-   ```
-     
+   - ```
+     cd riscv-implementations/cheriot-sail
+     ```
+   - follow the steps outlined in https://github.com/CHERIoT-Platform/cheriot-sail.
+     - Use 'rvfi' as the make target, for the final step
+   - This should generate a executable at riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32  
 3. Build/run cheriot-ibex simulation, 
    - Currently we only have a flow using VCS.To build the testbench,
      ```
