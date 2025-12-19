@@ -3,8 +3,14 @@ This is a quick introduction on how to use TestRIG for CHERIoT design verificati
 
 ## Getting Started
 1. Clone this repo and get all submodules.
+   
+2. Build TestRIG vengines (for more details see [the original TestRIG Readme](https://github.com/CHERIoT-Platform/TestRIG/blob/master/README.orig.md).
+   ```
+   cd TestRIG
+   make vengines
+   ```
 
-2. Build the cheriot-sail (RFVI version) simulator.
+4. Build the cheriot-sail (RFVI version) simulator.
    - ```
      cd riscv-implementations/cheriot-sail
      ```
@@ -14,7 +20,8 @@ This is a quick introduction on how to use TestRIG for CHERIoT design verificati
      ```
      riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32
      ```
-3. Build/run cheriot-ibex simulation, 
+
+5. Build/run cheriot-ibex simulation, 
    - Currently we only have a flow using VCS.To build the testbench,
      ```
      cd cheriot-ibex/dv/uvm/core_ibex
@@ -25,5 +32,5 @@ This is a quick introduction on how to use TestRIG for CHERIoT design verificati
        export RVFI_DII_PORT=6000
        ./vcs_testrig_out/simv -ucli -do ./vcs_testrig.tcl +UVM_TESTNAME=core_ibex_testrig_test -cm line+cond+tgl+fsm+branch+assert +enable_ibex_fcov=1 -cm_dir sim -l run.log
      ```
-4. RunTestRIG. Currently it runs simulations on two implementations in parallel and compares the results. In our case implementation A is cheriot-ibex, implementation B is cheriot-sail (golden reference).
+6. RunTestRIG. Currently it runs simulations on two implementations in parallel and compares the results. In our case implementation A is cheriot-ibex, implementation B is cheriot-sail (golden reference).
    - See TestRIG/run_example
