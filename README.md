@@ -4,7 +4,7 @@ This is a quick introduction on how to use TestRIG for CHERIoT design verificati
 ## Getting Started
 1. Clone this repo and get all submodules.
    
-2. Build TestRIG vengines (for more details see [the original TestRIG Readme](https://github.com/CHERIoT-Platform/TestRIG/blob/master/README.orig.md).
+2. Build TestRIG vengines (for more details see [the original TestRIG Readme](https://github.com/CHERIoT-Platform/TestRIG/blob/master/README.orig.md)).
    ```
    cd TestRIG
    make vengines
