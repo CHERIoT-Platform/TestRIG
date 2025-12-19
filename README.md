@@ -1,5 +1,5 @@
 
-This is a quick introduction on how to use TestRIG for CHERIoT design verification. The original TestRIG README is [here](https://github.com/CHERIoT-Platform/TestRIG/master/README.orig.md).
+This is a quick introduction on how to use TestRIG for CHERIoT design verification. The original TestRIG README is [here](https://github.com/CHERIoT-Platform/TestRIG/blob/master/README.orig.md).
 
 ## Getting Started
 1. Clone this repo and get all submodules.
