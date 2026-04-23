@@ -1,0 +1,44 @@
+# Docker ignore file for TestRIG
+
+# Output directories
+two_phase_output/
+two_phase_example/
+batch_traces/
+batch_elfs/
+batch_results/
+output/
+*.rvfi
+*.elf
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Git
+.git/
+.gitignore
+.gitmodules
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+run.log
+
+# VCS builds
+vcs_testrig_out/
+simv
+csrc/
+
+# Temporary files
+*.tmp
+*.bak

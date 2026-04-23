@@ -1,0 +1,47 @@
+services:
+  testrig:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cheriot-testrig:latest
+    container_name: testrig-two-phase
+    volumes:
+      # Mount output directory to host for easy access to results.
+      - ./two_phase_output:/testrig/two_phase_output
+      # Mount scripts directory so local edits are picked up without rebuild.
+      - ./utils/scripts:/testrig/utils/scripts
+    environment:
+      - TESTRIG_ROOT=/testrig
+    working_dir: /testrig
+    stdin_open: true
+    tty: true
+    # Interactive shell by default. Run `./run_two_phase.sh --help` once in.
+    command: bash
+
+  # Quick test: 10 traces.
+  testrig-quicktest:
+    extends:
+      service: testrig
+    container_name: testrig-quicktest
+    command: bash -lc "echo 'Running quick test with 10 traces...' && ./run_two_phase.sh --count 10 --clean"
+
+  # Full test: 100 traces.
+  testrig-fulltest:
+    extends:
+      service: testrig
+    container_name: testrig-fulltest
+    command: bash -lc "echo 'Running full test with 100 traces...' && ./run_two_phase.sh --count 100 --clean"
+
+  # Sail-only mid-size test.
+  testrig-sail-only:
+    extends:
+      service: testrig
+    container_name: testrig-sail-only
+    command: bash -lc "echo 'Running Sail-only test (50 traces)...' && ./run_two_phase.sh --count 50 --clean"
+
+  # Custom run — override command on the CLI:
+  #   docker-compose run --rm testrig-custom ./run_two_phase.sh --count 200
+  testrig-custom:
+    extends:
+      service: testrig
+    container_name: testrig-custom
