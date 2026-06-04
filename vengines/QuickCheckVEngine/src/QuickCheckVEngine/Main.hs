@@ -48,12 +48,18 @@ import System.Exit
 import System.Environment
 import System.FilePath.Find
 import System.Console.GetOpt
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>))
+import System.IO (hPutStrLn, stderr)
 import Data.IORef
+import Data.Foldable (toList)
 import Data.Maybe
 import Data.Time.Clock
+import Data.Word (Word32)
 import Control.Monad
 import Network.Socket
 import Test.QuickCheck
+import Text.Printf (printf)
 import Text.Regex.TDFA
 
 import RISCV hiding (or)
@@ -108,6 +114,13 @@ data Options = Options
     , csrIncludeRegex  :: Maybe String
     , csrExcludeRegex  :: Maybe String
     , optForceRvfiV1   :: Bool
+    -- File-output mode: generate hex instruction files without any
+    -- socket / RVFI-DII comparison.  Used by the two-phase testrig
+    -- driver as a drop-in replacement for batch_generate_instructions.py.
+    , optOutputDir     :: Maybe FilePath
+    , optOutputCount   :: Int
+    , optOutputTemplate:: String
+    , optOutputPrefix  :: String
     } deriving Show
 
 defaultOptions :: Options
@@ -138,6 +151,10 @@ defaultOptions = Options
     , csrIncludeRegex  = Nothing
     , csrExcludeRegex  = Nothing
     , optForceRvfiV1   = False
+    , optOutputDir     = Nothing
+    , optOutputCount   = 10
+    , optOutputTemplate= "random"
+    , optOutputPrefix  = "trace"
     }
 
 options :: [OptDescr (Options -> Options)]
@@ -220,6 +237,18 @@ options =
   , Option []        ["force-rvfi-v1"]
       (NoArg (\ opts -> opts { optForceRvfiV1 = True }))
         "Ignore RVFI version negotiation, specify original 'V1' interface"
+  , Option []        ["output-dir"]
+      (ReqArg (\ f opts -> opts { optOutputDir = Just f }) "PATH")
+        "File-output mode: generate hex instruction files into PATH and exit (no sockets, no comparison)"
+  , Option []        ["output-count"]
+      (ReqArg (\ f opts -> opts { optOutputCount = read f }) "N")
+        "In file-output mode, generate N trace files (default 10)"
+  , Option []        ["output-template"]
+      (ReqArg (\ f opts -> opts { optOutputTemplate = f }) "LABEL")
+        "In file-output mode, use template LABEL (default 'random'; see --list-templates)"
+  , Option []        ["output-prefix"]
+      (ReqArg (\ f opts -> opts { optOutputPrefix = f }) "PREFIX")
+        "In file-output mode, name files <PREFIX>_NNN.hex.txt (default 'trace')"
   ]
 
 commandOpts :: [String] -> IO (Options, [String])
@@ -295,6 +324,14 @@ main = withSocketsDo $ do
   let csrFilter idx = checkRegex (csrIncludeRegex flags) (csrExcludeRegex flags) (fromMaybe "reserved" $ csrs_nameFromIndex idx)
   let testParams = T.TestParams { T.archDesc  = archDesc
                                 , T.csrFilter = csrFilter }
+  -- File-output mode: generate hex instruction files and exit, without
+  -- opening any sockets or running a comparison loop.  Selected by the
+  -- testrig driver as a drop-in replacement for Python generation.
+  case optOutputDir flags of
+    Just dir -> do
+      runFileOutputMode flags testParams dir
+      exitSuccess
+    Nothing  -> return ()
   -- initialize model and implementation sockets
   implA <- rvfiDiiOpen (impAIP flags) (impAPort flags) (optForceRvfiV1 flags) (optVerbosity flags) "implementation-A"
   m_implB <- if optSingleImp flags then return Nothing else Just <$> rvfiDiiOpen (impBIP flags) (impBPort flags) (optForceRvfiV1 flags) (optVerbosity flags) "implementation-B"
@@ -419,3 +456,69 @@ main = withSocketsDo $ do
       traceVer <- rvfiNegotiateVersion soc forceRvfiV1 name verb
       return $ RvfiDiiConnection soc traceVer name
     rvfiDiiClose (RvfiDiiConnection sock _ _) = close sock
+
+-- ---------------------------------------------------------------------------
+-- File-output mode.  This branches off main's setup before any socket work
+-- happens, so it is safe to run in environments without a simulator attached.
+--
+-- Flow:
+--   1. Look up the requested template by label (re-using allTests).
+--   2. For each of N files, drive QuickCheck's generate to sample one
+--      Test Instrlike from the template (this is what the socket loop
+--      would consume; see prop in MainHelpers.hs).
+--   3. Extract the plain Instruction stream from the Test tree (skipping
+--      IntReq / IntBar pseudo-ops, which have no encoding on the wire).
+--   4. Write <dir>/<prefix>_NNN.hex.txt in the same format that
+--      batch_generate_instructions.py produces, so the Sail simulator's
+--      -f instruction-file mode can consume the result unchanged.
+-- ---------------------------------------------------------------------------
+runFileOutputMode :: Options -> T.TestParams -> FilePath -> IO ()
+runFileOutputMode flags testParams dir = do
+  let label     = optOutputTemplate flags
+      prefix    = optOutputPrefix flags
+      count     = optOutputCount flags
+      archDesc' = arch flags
+      matches   = [ entry | entry@(l, _, _, _) <- allTests, l == label ]
+  (_, _, archReqs, template) <- case matches of
+    [entry] -> return entry
+    _       -> do
+      hPutStrLn stderr $ "Unknown template label: " ++ show label
+      hPutStrLn stderr $ "Available: " ++
+        show [ l | (l, _, _, _) <- allTests ]
+      exitWith (ExitFailure 2)
+  unless (archReqs archDesc') $ do
+    hPutStrLn stderr $
+      "Template '" ++ label ++ "' requires features not present in " ++
+      show archDesc' ++ "; aborting."
+    exitWith (ExitFailure 3)
+  createDirectoryIfMissing True dir
+  putStrLn $ "QCVEngine file-output mode: template=" ++ label ++
+             ", count=" ++ show count ++ ", arch=" ++ show archDesc' ++
+             ", dir=" ++ dir
+  forM_ [1 .. count] $ \i -> do
+    -- generate ~ L-instruction Test tree (generate uses default QC size);
+    -- resize to testLen so the user's -L flag influences trace length.
+    testTree <- generate (resize (testLen flags) (T.genTest testParams template))
+    let instrs = [ ins | Instr ins <- toList testTree ]
+        fname  = dir </> printf "%s_%03d.hex.txt" prefix (i :: Int)
+    writeHexTrace fname label archDesc' instrs
+    when (optVerbosity flags > 0) $
+      putStrLn $ "  wrote " ++ fname ++ " (" ++ show (length instrs) ++ " insn)"
+
+-- | Write one hex instruction file in the format accepted by
+-- cheri_riscv_rvfi_RV32 -f: one ``0x%08x`` per line, with a trailing
+-- ebreak as a terminator and a comment header for provenance.
+writeHexTrace :: FilePath -> String -> ArchDesc -> [Instruction] -> IO ()
+writeHexTrace path label archDesc' instrs = do
+  let header = unlines
+        [ "# QCVEngine-generated RV32 instruction stream"
+        , "# template: " ++ label
+        , "# architecture: " ++ show archDesc'
+        , "# Consumed by cheri_riscv_rvfi_RV32 -f <this_file>"
+        ]
+      lineFor i@(MkInstruction v) =
+        printf "0x%08x    # %s\n" (fromInteger v :: Word32) (rv_pretty i)
+      -- ebreak: 0x00100073 (opcode SYSTEM, funct12=1).
+      terminator = "0x00100073    # ebreak (terminator)\n"
+      body       = concatMap lineFor instrs
+  writeFile path (header ++ body ++ terminator)

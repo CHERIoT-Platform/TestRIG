@@ -18,6 +18,14 @@ output/
 __pycache__/
 .pytest_cache/
 
+# Host-side Haskell build artifacts — cabal stores pre-linked objects
+# here that WILL override a freshly-edited Main.hs if we let them into
+# the image. Force a clean cabal build inside hs-builder by excluding.
+vengines/QuickCheckVEngine/dist-newstyle/
+vengines/QuickCheckVEngine/dist/
+vengines/QuickCheckVEngine/.stack-work/
+vengines/QuickCheckVEngine/bin/
+
 # Git
 .git/
 .gitignore

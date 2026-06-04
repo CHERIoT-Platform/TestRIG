@@ -2,8 +2,8 @@
 #-
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# Generate random RV32 instruction sequences for the two-phase execution
-# workflow. Each trace is emitted in *two* formats:
+# Generate random RV32 + CHERIoT Xcheri instruction sequences for the
+# two-phase execution workflow. Each trace is emitted in *two* formats:
 #
 #   trace_NNN.hex.txt   Plain-text file with one `0x`-prefixed 32-bit
 #                       instruction encoding per line. This is what the
@@ -15,9 +15,10 @@
 #                       instructions as assembly, purely for inspection.
 #                       Sail does NOT read this file.
 #
-# Previously this script emitted assembly-only `.S` files; the Sail
-# parser silently skipped every line because it looks for the first
-# `0x` token on each line. The fix is to emit raw hex encodings.
+# CHERIoT Xcheri encodings are ported directly from the Haskell generator
+# used by QuickCheckVEngine:
+#   vengines/QuickCheckVEngine/src/RISCV/RV32_Xcheri.hs
+# All CHERIoT instructions share the major opcode 0b1011011 (0x5B).
 
 import argparse
 import os
@@ -54,6 +55,13 @@ parser.add_argument('--qcvengine-path', metavar='PATH', type=str,
                          'run_two_phase.sh.')
 parser.add_argument('--seed', metavar='SEED', type=int,
                     default=None, help='Random seed for reproducibility')
+parser.add_argument('--cheri-weight', type=float, default=0.5,
+                    metavar='P',
+                    help='Fraction of instructions that should be CHERIoT '
+                         'Xcheri cap instructions (0.0–1.0, default: 0.5). '
+                         'Ignored when --architecture has no Xcheri.')
+parser.add_argument('--no-cheri', action='store_true',
+                    help='Disable CHERIoT instructions entirely (RV32I-only).')
 args = parser.parse_args()
 
 
@@ -239,7 +247,148 @@ GENERATORS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# CHERIoT Xcheri encoders (port of vengines/QuickCheckVEngine/src/RISCV/
+# RV32_Xcheri.hs). All instructions use major opcode 0b1011011 (0x5B).
+# ---------------------------------------------------------------------------
+
+CHERI_OP = 0x5B
+
+
+def _xcheri_inspect(funct5, rd, cs1):
+    """funct7=1111111, funct5[4:0], cs1, funct3=000, rd, opcode=1011011."""
+    return ((0x7f & 0x7f) << 25) | ((funct5 & 0x1f) << 20) | \
+           ((cs1 & 0x1f) << 15) | (0x0 << 12) | \
+           ((rd & 0x1f) << 7) | CHERI_OP
+
+
+def _xcheri_r(funct7, src2, cs1, cd):
+    """funct7, rs2/cs2, cs1, funct3=000, cd, opcode=1011011."""
+    return ((funct7 & 0x7f) << 25) | ((src2 & 0x1f) << 20) | \
+           ((cs1 & 0x1f) << 15) | (0x0 << 12) | \
+           ((cd & 0x1f) << 7) | CHERI_OP
+
+
+def _xcheri_i(imm12, cs1, funct3, cd):
+    """imm[11:0], cs1, funct3, cd, opcode=1011011 (cincaddrimm / csetboundsimm)."""
+    return ((imm12 & 0xfff) << 20) | ((cs1 & 0x1f) << 15) | \
+           ((funct3 & 0x7) << 12) | ((cd & 0x1f) << 7) | CHERI_OP
+
+
+# Capability inspection (funct5 selects op; all write an integer result to rd).
+def _gen_cgetperm():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x00, rd, cs1), f"cgetperm x{rd}, c{cs1}"
+
+def _gen_cgettype():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x01, rd, cs1), f"cgettype x{rd}, c{cs1}"
+
+def _gen_cgetbase():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x02, rd, cs1), f"cgetbase x{rd}, c{cs1}"
+
+def _gen_cgetlen():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x03, rd, cs1), f"cgetlen x{rd}, c{cs1}"
+
+def _gen_cgettag():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x04, rd, cs1), f"cgettag x{rd}, c{cs1}"
+
+def _gen_cgetaddr():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x0f, rd, cs1), f"cgetaddr x{rd}, c{cs1}"
+
+def _gen_cgethigh():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x17, rd, cs1), f"cgethigh x{rd}, c{cs1}"
+
+def _gen_cgettop():
+    rd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x18, rd, cs1), f"cgettop x{rd}, c{cs1}"
+
+# cmove: funct5=0x0a, copies cs1 → cd.
+def _gen_cmove():
+    cd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x0a, cd, cs1), f"cmove c{cd}, c{cs1}"
+
+# ccleartag: funct5=0x0b, strips tag.
+def _gen_ccleartag():
+    cd, cs1 = _rand_reg(True), _rand_reg()
+    return _xcheri_inspect(0x0b, cd, cs1), f"ccleartag c{cd}, c{cs1}"
+
+# Capability arithmetic / modification (R-type in CHERI space, funct3=000).
+def _gen_csub():
+    cd, cs1, cs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x14, cs2, cs1, cd), f"csub x{cd}, c{cs1}, c{cs2}"
+
+def _gen_cincaddr():
+    cd, cs1, rs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x11, rs2, cs1, cd), f"cincaddr c{cd}, c{cs1}, x{rs2}"
+
+def _gen_csetaddr():
+    cd, cs1, rs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x10, rs2, cs1, cd), f"csetaddr c{cd}, c{cs1}, x{rs2}"
+
+def _gen_csethigh():
+    cd, cs1, rs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x16, rs2, cs1, cd), f"csethigh c{cd}, c{cs1}, x{rs2}"
+
+def _gen_csetbounds():
+    cd, cs1, rs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x08, rs2, cs1, cd), f"csetbounds c{cd}, c{cs1}, x{rs2}"
+
+def _gen_csetboundsexact():
+    cd, cs1, rs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x09, rs2, cs1, cd), f"csetboundsexact c{cd}, c{cs1}, x{rs2}"
+
+def _gen_candperm():
+    cd, cs1, rs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x0d, rs2, cs1, cd), f"candperm c{cd}, c{cs1}, x{rs2}"
+
+# Assertions (write 0/1 to rd).
+def _gen_ctestsubset():
+    rd, cs1, cs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x20, cs2, cs1, rd), f"ctestsubset x{rd}, c{cs1}, c{cs2}"
+
+def _gen_csetequalexact():
+    rd, cs1, cs2 = _rand_reg(True), _rand_reg(), _rand_reg()
+    return _xcheri_r(0x21, cs2, cs1, rd), f"csetequalexact x{rd}, c{cs1}, c{cs2}"
+
+# I-type capability operations.
+def _gen_cincaddrimm():
+    cd, cs1, imm = _rand_reg(True), _rand_reg(), _rand_imm12()
+    simm = imm - 0x1000 if imm & 0x800 else imm
+    return _xcheri_i(imm, cs1, 0x1, cd), f"cincaddrimm c{cd}, c{cs1}, {simm}"
+
+def _gen_csetboundsimm():
+    cd, cs1, imm = _rand_reg(True), _rand_reg(), _rand_imm12()
+    # Unsigned in the ISA; emit as-is.
+    return _xcheri_i(imm, cs1, 0x2, cd), f"csetboundsimm c{cd}, c{cs1}, {imm}"
+
+
+CHERI_GENERATORS = [
+    _gen_cgetperm, _gen_cgettype, _gen_cgetbase, _gen_cgetlen,
+    _gen_cgettag, _gen_cgetaddr, _gen_cgethigh, _gen_cgettop,
+    _gen_cmove, _gen_ccleartag,
+    _gen_csub, _gen_cincaddr, _gen_csetaddr, _gen_csethigh,
+    _gen_csetbounds, _gen_csetboundsexact, _gen_candperm,
+    _gen_ctestsubset, _gen_csetequalexact,
+    _gen_cincaddrimm, _gen_csetboundsimm,
+]
+
+
+def _cheri_enabled():
+    if args.no_cheri:
+        return False
+    arch = args.architecture.lower()
+    return ('xcheri' in arch) or ('xcheriot' in arch)
+
+
 def generate_instruction():
+    if _cheri_enabled() and random.random() < args.cheri_weight:
+        return random.choice(CHERI_GENERATORS)()
     return random.choice(GENERATORS)()
 
 

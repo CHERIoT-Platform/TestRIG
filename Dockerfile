@@ -1,10 +1,15 @@
 # Multi-stage Dockerfile for CHERIoT TestRIG two-phase execution.
 #
-# Stage 1 (builder):  install opam + sail + ELFIO + C++ toolchain, then
-#                     build cheri_riscv_rvfi_RV32 from the cheriot-sail
-#                     submodule.
-# Stage 2 (runtime):  small ubuntu:22.04 image with only the runtime libs
-#                     (libgmp10) + python3 + the compiled binary.
+# Stage 1 (sail-builder):  install opam + sail + ELFIO + C++ toolchain,
+#                          then build cheri_riscv_rvfi_RV32 from the
+#                          cheriot-sail submodule.
+# Stage 2 (hs-builder):    GHC + cabal on top of ubuntu:22.04; build
+#                          QCVEngine to produce a Haskell generator that
+#                          can emit hex instruction files to disk
+#                          (--output-dir mode), eliminating the socket
+#                          dependency on the testrig path.
+# Stage 3 (runtime):       small ubuntu:22.04 image with the Sail binary,
+#                          the QCVEngine binary, python3, and libgmp10.
 #
 # Why not use the prebuilt binary from the host? macOS users rebuild
 # locally for native speed, which leaves a Mach-O binary at the expected
@@ -14,7 +19,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — build Sail RVFI simulator from source
 # ---------------------------------------------------------------------------
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:22.04 AS sail-builder
 
 ENV DEBIAN_FRONTEND=noninteractive TZ=UTC
 
@@ -48,7 +53,43 @@ RUN bash -lc '\
     c_emulator/cheri_riscv_rvfi_RV32 --help >/dev/null'
 
 # ---------------------------------------------------------------------------
-# Stage 2 — runtime image
+# Stage 2 — build QCVEngine (Haskell instruction generator)
+# ---------------------------------------------------------------------------
+# GHC + cabal are kept out of the runtime image (they add ~700 MB). The
+# cabal build produces a single statically-linkable-ish executable that
+# only depends on libgmp10 + libstdc++6 at runtime (both already installed
+# for Sail). --output-dir mode on QCVEngine replaces the old socket +
+# Python-generator path with a plain file-writing batch generator.
+FROM ubuntu:22.04 AS hs-builder
+
+ENV DEBIAN_FRONTEND=noninteractive TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates git \
+        ghc cabal-install \
+        libgmp-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# Only the QCVEngine tree is needed (cabal.project lives alongside it).
+COPY vengines/QuickCheckVEngine /src/QCVEngine
+
+# Defence in depth: even if .dockerignore is bypassed and the host's
+# dist-newstyle/ tree slips into the COPY, wipe it so cabal v2-build
+# re-links against the Main.hs inside the image rather than reusing a
+# pre-built binary that predates our --output-dir patch.
+RUN cd /src/QCVEngine \
+ && rm -rf dist-newstyle dist .stack-work bin \
+ && cabal update \
+ && cabal v2-build --ghc-options=-O exe:QCVEngine \
+ && mkdir -p /out \
+ && bin=$(find /src/QCVEngine/dist-newstyle -type f -name QCVEngine -executable | head -n1) \
+ && test -n "${bin}" \
+ && cp "${bin}" /out/QCVEngine \
+ && test -x /out/QCVEngine
+
+# ---------------------------------------------------------------------------
+# Stage 3 — runtime image
 # ---------------------------------------------------------------------------
 FROM ubuntu:22.04
 
@@ -65,11 +106,16 @@ COPY . /testrig/
 
 # Drop in the freshly-built Linux binary (clobbering any host binary the
 # COPY above carried in).
-COPY --from=builder /src/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 \
+COPY --from=sail-builder /src/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 \
      /testrig/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32
 
+# Drop in the QCVEngine generator binary (replaces Python generator in
+# run_two_phase.sh). Exposed on PATH as 'qcvengine-gen' for convenience.
+COPY --from=hs-builder /out/QCVEngine /usr/local/bin/qcvengine-gen
+
 RUN chmod +x /testrig/run_two_phase.sh /testrig/utils/scripts/*.py \
- && /testrig/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 --help >/dev/null
+ && /testrig/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 --help >/dev/null \
+ && test -x /usr/local/bin/qcvengine-gen
 
 ENV TESTRIG_ROOT=/testrig
 

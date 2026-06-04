@@ -10,3 +10,42 @@ build/
 # Ignore raw and HTML-formatted Sail coverage files
 sail_coverage*
 *.html
+
+# Two-phase execution outputs (generator/Sail/decoder products)
+two_phase_output/
+two_phase_example/
+batch_traces/
+batch_elfs/
+batch_results/
+output/
+*.elf
+*.rvfi
+*.rvfi.bin
+*.hex.txt
+last_failure.S
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Haskell build artefacts (cabal v2 / stack)
+dist/
+dist-newstyle/
+.stack-work/
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+cabal.project.local
+cabal.project.local~
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
