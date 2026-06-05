@@ -15,6 +15,13 @@
 # locally for native speed, which leaves a Mach-O binary at the expected
 # path — unusable from a Linux container. Building inside the image makes
 # `docker compose up` work on every host OS.
+#
+# Branch / submodule policy is NOT enforced inside this Dockerfile —
+# run `./scripts/setup_submodules.sh` on the host before building so
+# the working tree is at the right tips:
+#   TestRIG / cheriot-sail   →  dii-read-from-file
+#   cheriot-sail/sail-riscv  →  cheriot-dii-read-from-file
+# The wrapper `./scripts/docker_build.sh` does both steps in one go.
 
 # ---------------------------------------------------------------------------
 # Stage 1 — build Sail RVFI simulator from source

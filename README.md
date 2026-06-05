@@ -23,13 +23,33 @@ Inputs, intermediates, and outputs all land in `./two_phase_output/`.
 
 ## Run with Docker (recommended)
 
-Requires Docker Desktop (Mac/Windows) or Docker Engine (Linux). The
-image installs only runtime libraries — no Sail rebuild, no OCaml,
-no Cabal. Build is ~60 seconds.
+Requires Docker Desktop (Mac/Windows) or Docker Engine (Linux).
 
 ```bash
-# 1. Build the image (once).
-docker compose build
+# 0. ONE-TIME: bring the host repo + submodules onto the policy branches.
+#    Run this:
+#      - the first time you clone TestRIG, OR
+#      - whenever upstream advances any of the three branches and you
+#        want the build to pick up the new commits.
+#    The script is idempotent — safe to re-run.
+./scripts/setup_submodules.sh
+#
+# What it does:
+#   TestRIG                                 → dii-read-from-file
+#   riscv-implementations/cheriot-sail      → dii-read-from-file
+#   .../cheriot-sail/sail-riscv (nested)    → cheriot-dii-read-from-file
+# It also `git submodule update --init --recursive` if anything's
+# missing, and `git pull --ff-only` each repo to its origin tip.
+
+# 1. Build the image. The Dockerfile COPYs your host source tree
+#    as-is, so the working tree state from step 0 (or any later
+#    edits you've made) is what ends up in the image.
+docker compose build --no-cache testrig    # fresh
+# Or just `docker compose build` for cached subsequent builds.
+#
+# Shortcut: `./scripts/docker_build.sh` chains steps 0 + 1 into one
+# command. Useful when you want both setup + build to happen
+# reliably (e.g. in CI).
 
 # 2. Run. Pick one:
 docker compose up testrig-quicktest     # 10 traces (≈1 min)
@@ -97,13 +117,49 @@ register data (`cs1_rdata`/`cs2_rdata`/`cd_wdata`/tags) — the Sail
 binary is hard-coded to v1 (`riscv_sim.c:75`). Promoting to v2 requires
 a Sail-side source change; ping if you want that follow-up.
 
+### Submodule + branch setup script
+
+`scripts/setup_submodules.sh` is the source of truth for which
+branches the build expects:
+
+```
+TestRIG                                 → dii-read-from-file
+riscv-implementations/cheriot-sail      → dii-read-from-file
+.../cheriot-sail/sail-riscv (nested)    → cheriot-dii-read-from-file
+```
+
+It's safe to re-run. Behaviour:
+
+1. Verifies TestRIG is on `dii-read-from-file` (warns if you've
+   switched to another branch — it won't auto-clobber your top-level
+   working tree).
+2. Runs `git submodule update --init --recursive` if
+   `riscv-implementations/cheriot-sail` is empty (first-time clone).
+3. For each of the three repos: `git fetch origin <branch>`, switches
+   to that branch (creating a local tracking branch on first run),
+   and `git pull --ff-only origin <branch>` to pick up upstream
+   commits. Fails loudly if a branch doesn't exist on origin.
+4. Re-runs the nested `submodule update --init --recursive` inside
+   `cheriot-sail` after switching its branch (the checkout may have
+   moved the nested sail-riscv pointer).
+5. Prints a summary: each repo's current branch + short SHA.
+
+If upstream renames a branch, edit `TESTRIG_BRANCH`,
+`CHERIOT_SAIL_BRANCH`, `SAIL_RISCV_BRANCH` at the top of the script.
+
+The wrapper `scripts/docker_build.sh` is just
+`setup_submodules.sh && docker compose build "$@"`.
+
 ### Prebuilt Sail binary
 
 The repo ships a prebuilt Linux x86_64 `cheri_riscv_rvfi_RV32` at
-`riscv-implementations/cheriot-sail/c_emulator/`. That's what the
-Docker image uses — no rebuild needed. If the binary has been wiped
-(see `BUILD_SAIL_MACOS.md`) and you want native macOS execution
-instead of Docker, rebuild from source.
+`riscv-implementations/cheriot-sail/c_emulator/`. After
+`setup_submodules.sh` brings the submodules onto
+`cheriot-dii-read-from-file`, the next Docker build replaces that
+prebuilt binary with a fresh build from that tip — so you always get
+the patched binary in the image even if the checked-in artefact is
+stale. If you want native macOS execution instead of Docker, rebuild
+from source (see `BUILD_SAIL_MACOS.md`).
 
 ---
 
