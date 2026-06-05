@@ -90,7 +90,12 @@ def main():
             print(f'  [{i}/{len(traces)}] FAIL  {name}: {err}')
 
     print(f'\nDone — ok={ok} fail={fail}')
-    return 0 if fail == 0 else 1
+    # Random instruction streams routinely hit Sail trap edges (illegal
+    # encodings, OOB stores, unsupported CHERI states); partial failures
+    # are normal and should NOT abort the pipeline. Treat only the
+    # all-fail case (zero ELFs produced) as a hard error so downstream
+    # steps have nothing to consume.
+    return 0 if ok > 0 else 1
 
 
 if __name__ == '__main__':

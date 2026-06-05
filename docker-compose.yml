@@ -18,26 +18,28 @@ services:
     # Interactive shell by default. Run `./run_two_phase.sh --help` once in.
     command: bash
 
-  # Quick test: 10 traces.
+  # Quick test: 10 traces, CHERI-rich mix (--template caprandom).
   testrig-quicktest:
     extends:
       service: testrig
     container_name: testrig-quicktest
-    command: bash -lc "echo 'Running quick test with 10 traces...' && ./run_two_phase.sh --count 10 --clean"
+    command: bash -lc "echo 'Running quick test with 10 traces (caprandom)...' && ./run_two_phase.sh --count 10 --template caprandom --clean"
 
-  # Full test: 100 traces.
+  # Full test: 100 traces, CHERI-rich mix.
   testrig-fulltest:
     extends:
       service: testrig
     container_name: testrig-fulltest
-    command: bash -lc "echo 'Running full test with 100 traces...' && ./run_two_phase.sh --count 100 --clean"
+    command: bash -lc "echo 'Running full test with 100 traces (caprandom)...' && ./run_two_phase.sh --count 100 --template caprandom --clean"
 
-  # Sail-only mid-size test.
+  # Sail-only mid-size test. Pure RV32I (--template random) so you can
+  # see the base ISA behaviour without CHERI noise; useful when
+  # bisecting a regression.
   testrig-sail-only:
     extends:
       service: testrig
     container_name: testrig-sail-only
-    command: bash -lc "echo 'Running Sail-only test (50 traces)...' && ./run_two_phase.sh --count 50 --clean"
+    command: bash -lc "echo 'Running Sail-only test (50 traces, base RV32I)...' && ./run_two_phase.sh --count 50 --template random --clean"
 
   # Custom run — override command on the CLI:
   #   docker-compose run --rm testrig-custom ./run_two_phase.sh --count 200

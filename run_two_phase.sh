@@ -28,10 +28,16 @@ CLEAN=0
 # Haskell binary when available and falls back to the Python script
 # otherwise. Force one or the other with --gen qcvengine|python.
 GEN="auto"
-# QCVEngine template label (see QCVEngine --help / allTests in
-# vengines/QuickCheckVEngine/src/QuickCheckVEngine/Main.hs). "random"
-# is the closest equivalent to the old Python-generator mix.
-TEMPLATE="random"
+# QCVEngine template label (see allTests in
+# vengines/QuickCheckVEngine/src/QuickCheckVEngine/Main.hs).
+# "caprandom" = randomCHERITest in Templates/GenCHERI.hs — mixes
+# legalLoad/Store, legalCapLoad/Store, the full rv32_xcheri set
+# (inspection/arithmetic/misc/mem), cspecialrw, csrr, cspecialRWChain,
+# makeShortCap, clearASR, boundPCC, cgettag, loadTags. Right default
+# for a CHERIoT TestRIG because the whole point of this toolchain is
+# testing CHERI capability behaviour. Override with --template random
+# (pure RV32I) or --template caprvcrandom (caprandom + RVC) etc.
+TEMPLATE="caprandom"
 
 usage() {
   sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'
@@ -59,7 +65,6 @@ SCRIPTS="${SCRIPT_DIR}/utils/scripts"
 
 TRACE_DIR="${WORK_DIR}/traces"
 ELF_DIR="${WORK_DIR}/elfs"
-RVFI_BIN_DIR="${WORK_DIR}/rvfi_bin"
 RESULTS_DIR="${WORK_DIR}/results"
 
 log() { printf '\n\033[1;34m== %s ==\033[0m\n' "$*"; }
@@ -74,7 +79,7 @@ if [[ ${CLEAN} -eq 1 && -d "${WORK_DIR}" ]]; then
   find "${WORK_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
   ok "cleaned ${WORK_DIR}"
 fi
-mkdir -p "${TRACE_DIR}" "${ELF_DIR}" "${RVFI_BIN_DIR}" "${RESULTS_DIR}"
+mkdir -p "${TRACE_DIR}" "${ELF_DIR}" "${RESULTS_DIR}"
 
 # Prerequisites
 [[ -x "${SAIL}" ]] || die "Sail RVFI binary not found/executable at ${SAIL}
@@ -154,58 +159,72 @@ fi
 N_TRACES=$(find "${TRACE_DIR}" -maxdepth 1 -name 'trace_*.hex.txt' | wc -l | tr -d ' ')
 ok "generated ${N_TRACES} trace(s)"
 
-# Phase 1b — run each hex file through Sail to produce a memory-dumped ELF
-# *and* a binary RVFI v1 trace (--rvfi-output).
-log "Step 2/4  Phase 1 — execute traces in Sail, dump memory to ELF + RVFI"
+# Phase 1 — run each hex file through Sail to dump memory to an ELF.
+# We deliberately do NOT ask Sail for Phase-1 RVFI; the deliverable is
+# Phase-2 RVFI from the ELF re-exec path (matches Phase 2 = ELF → RVFI).
+log "Step 2/4  Phase 1 — execute traces in Sail, dump memory to ELF"
 python3 "${SCRIPTS}/generate_elfs_from_traces.py" \
   --input-dir "${TRACE_DIR}" \
   --output-dir "${ELF_DIR}" \
-  --rvfi-bin-dir "${RVFI_BIN_DIR}" \
   --sail-path "${SAIL}"
 N_ELFS=$(find "${ELF_DIR}" -maxdepth 1 -name '*.elf' | wc -l | tr -d ' ')
-N_RVFI_BIN=$(find "${RVFI_BIN_DIR}" -maxdepth 1 -name '*.rvfi.bin' | wc -l | tr -d ' ')
-ok "generated ${N_ELFS} ELF(s), ${N_RVFI_BIN} binary RVFI trace(s)"
+ok "generated ${N_ELFS} ELF(s)"
 
-# Phase 1c — decode each binary RVFI v1 packet to verbose labeled text.
-log "Step 3/4  Decode binary RVFI → verbose text (full field list + mnemonics)"
-N_RVFI_TXT=0
-for bin in "${RVFI_BIN_DIR}"/*.rvfi.bin; do
-  [[ -e "${bin}" ]] || continue
-  base=$(basename "${bin}" .rvfi.bin)
-  out="${RESULTS_DIR}/${base}.rvfi"
-  python3 "${SCRIPTS}/rvfi_to_text.py" \
-    --input "${bin}" --output "${out}" --lenient >/dev/null
-  N_RVFI_TXT=$((N_RVFI_TXT + 1))
-done
-ok "decoded ${N_RVFI_TXT} RVFI text trace(s) in ${RESULTS_DIR}/*.rvfi"
-
-# Phase 2 — re-execute each ELF in Sail and capture the *full* Sail trace.
-# Bare -v (NULL optarg in set_config_print) enables every channel:
-# instr / reg / mem / rvfi / platform / exception.  The RVFI re-exec path
-# in this binary does not route to --rvfi-output, so the log is the
-# richest signal available for Phase-2 validation.
-log "Step 4/4  Phase 2 — re-execute ELFs in Sail, capture full Sail trace"
+# Phase 2 — re-execute each ELF in Sail and capture BOTH:
+#   1. The full verbose Sail trace (-v / NULL optarg → all channels:
+#      instr / reg / mem / rvfi / platform / exception).
+#   2. Binary RVFI v1 from the ELF re-exec path — enabled by the
+#      Phase-2 RVFI patch in riscv_sim.c (rvfi_send_trace is now called
+#      after each zstep in the ELF re-exec branch, and the trace fd is
+#      opened for any mode that has --rvfi-output set, not just -f).
+PHASE2_RVFI_BIN_DIR="${WORK_DIR}/rvfi_bin_phase2"
+mkdir -p "${PHASE2_RVFI_BIN_DIR}"
+log "Step 3/4  Phase 2 — re-execute ELFs in Sail, capture log + RVFI"
 python3 "${SCRIPTS}/run_two_phase_execution.py" \
   --elf-dir "${ELF_DIR}" \
   --output-dir "${RESULTS_DIR}" \
+  --rvfi-bin-dir "${PHASE2_RVFI_BIN_DIR}" \
   --sail-path "${SAIL}" \
   --skip-ibex
 N_RVFI=$(find "${RESULTS_DIR}" -maxdepth 1 -name '*_sail.log' | wc -l | tr -d ' ')
-ok "generated ${N_RVFI} Sail re-exec log(s)"
+N_P2_BIN=$(find "${PHASE2_RVFI_BIN_DIR}" -maxdepth 1 -name '*_phase2.rvfi.bin' | wc -l | tr -d ' ')
+ok "generated ${N_RVFI} Sail log(s), ${N_P2_BIN} Phase-2 RVFI binary trace(s)"
+
+# Phase 2b — decode each binary RVFI v1 packet to verbose labeled text.
+# Tolerate per-file decode failures (truncated binaries, etc.) so one
+# malformed trace doesn't kill the whole step.
+log "Step 4/4  Decode Phase-2 binary RVFI → verbose text"
+N_P2_TXT=0
+for bin in "${PHASE2_RVFI_BIN_DIR}"/*_phase2.rvfi.bin; do
+  [[ -e "${bin}" ]] || continue
+  base=$(basename "${bin}" .rvfi.bin)
+  out="${RESULTS_DIR}/${base}.rvfi"
+  if python3 "${SCRIPTS}/rvfi_to_text.py" \
+       --input "${bin}" --output "${out}" --lenient >/dev/null 2>&1; then
+    N_P2_TXT=$((N_P2_TXT + 1))
+  else
+    echo "  warn: failed to decode ${bin}" >&2
+  fi
+done
+ok "decoded ${N_P2_TXT} Phase-2 RVFI text trace(s) in ${RESULTS_DIR}/*_phase2.rvfi"
 
 # Summary.
 SUMMARY="${WORK_DIR}/SUMMARY.txt"
 cat > "${SUMMARY}" <<EOF
 Two-phase execution summary
 ===========================
-date:           $(date)
-architecture:   ${ARCHITECTURE}
-count:          ${COUNT} traces × ${INSTRUCTIONS} instructions
-traces:         ${N_TRACES}      (${TRACE_DIR}/trace_*.hex.txt)
-ELFs:           ${N_ELFS}        (${ELF_DIR}/trace_*.elf)
-RVFI binary:    ${N_RVFI_BIN}    (${RVFI_BIN_DIR}/trace_*.rvfi.bin, v1)
-RVFI text:      ${N_RVFI_TXT}    (${RESULTS_DIR}/trace_*.rvfi)       <-- primary
-Phase-2 Sail:   ${N_RVFI}        (${RESULTS_DIR}/trace_*_sail.log)
+date:                 $(date)
+architecture:         ${ARCHITECTURE}
+count:                ${COUNT} traces × ${INSTRUCTIONS} instructions
+
+Phase 1 — generator → Sail (-f) → ELF
+  hex traces:         ${N_TRACES}      (${TRACE_DIR}/trace_*.hex.txt)
+  ELFs:               ${N_ELFS}        (${ELF_DIR}/trace_*.elf)
+
+Phase 2 — ELF re-exec in Sail → log + binary RVFI
+  Sail verbose log:   ${N_RVFI}        (${RESULTS_DIR}/trace_*_sail.log)
+  RVFI binary:        ${N_P2_BIN}      (${PHASE2_RVFI_BIN_DIR}/trace_*_phase2.rvfi.bin)
+  RVFI text:          ${N_P2_TXT}      (${RESULTS_DIR}/trace_*_phase2.rvfi)     <-- primary
 EOF
 log "Done"
 cat "${SUMMARY}"
