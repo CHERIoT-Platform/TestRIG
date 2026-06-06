@@ -199,6 +199,34 @@ def _mask_bits(m: int) -> str:
     return f'0b{m & 0xff:08b} ({set_bits} byte(s))'
 
 
+# Instructions where bits[19:15] are NOT a real rs1 — don't decode rs1 from
+# the encoding for these (LUI / AUIPC / JAL have only rd + imm; FENCE has
+# no source regs in the conventional sense).
+_NO_RS1 = {0x37, 0x17, 0x6f}              # LUI / AUIPC / JAL
+# Instructions whose bits[24:20] are NOT rs2: I-type (loads, ALU-imm,
+# JALR, SYSTEM, FENCE), U-type, J-type, and CHERIoT's Xcheri opcode.
+_NO_RS2 = {0x03, 0x13, 0x67, 0x73, 0x0f,  # LOAD / OP-IMM / JALR / SYSTEM / FENCE
+           0x37, 0x17, 0x6f, 0x5b}        # LUI / AUIPC / JAL / Xcheri
+
+
+def _decode_regs(insn32: int) -> dict:
+    """Pull rs1 / rs2 / rd from the instruction encoding.
+
+    Sail's RVFI exec packet currently leaves rs1_addr / rs2_addr (and
+    their _rdata counterparts) at zero — it only populates rd_addr.
+    The instruction encoding itself is the source of truth for which
+    registers the instruction reads, so we recover them here.
+    """
+    opcode = insn32 & 0x7f
+    rd  = (insn32 >> 7) & 0x1f
+    rs1 = (insn32 >> 15) & 0x1f
+    rs2 = (insn32 >> 20) & 0x1f
+    has_rs1 = opcode not in _NO_RS1
+    has_rs2 = opcode not in _NO_RS2
+    return {'rd': rd, 'rs1': rs1, 'rs2': rs2,
+            'has_rs1': has_rs1, 'has_rs2': has_rs2}
+
+
 def render_packet(p: dict, idx: int) -> str:
     if p['halt'] != 0:
         return (f'# --- RVFI packet {idx} (halt) ---\n'
@@ -207,23 +235,44 @@ def render_packet(p: dict, idx: int) -> str:
                 f'trap      : 0x{p["trap"]:02x}\n'
                 f'intr      : 0x{p["intr"]:02x}\n')
     mnem = _mnemonic(p['insn'])
+    decoded = _decode_regs(p['insn'])
+
+    # Display: bare rs1_addr / rs2_addr from the packet would be 0 for
+    # every instruction (Sail RVFI gap), so use the encoding-derived
+    # register numbers. We still show the packet's rs1_rdata / rs2_rdata
+    # verbatim — if those are 0 when they shouldn't be, that's a real
+    # Sail field-population gap visible to the user.
+    rs1, rs2, rd = decoded['rs1'], decoded['rs2'], decoded['rd']
+
+    # PC and data widths: this Sail binary is RV32, so the upper 32
+    # bits are always zero. Render PC as 8 hex digits and the data
+    # words as 8 hex digits each for readability (per request).
     out = [
         f'# --- RVFI packet {idx} ---',
         f'order     : {p["order"]}',
         f'halt      : 0x{p["halt"]:02x}',
         f'trap      : 0x{p["trap"]:02x}',
         f'intr      : 0x{p["intr"]:02x}',
-        f'pc_rdata  : 0x{p["pc_rdata"]:016x}',
-        f'pc_wdata  : 0x{p["pc_wdata"]:016x}',
+        f'pc_rdata  : 0x{p["pc_rdata"] & 0xffffffff:08x}',
+        f'pc_wdata  : 0x{p["pc_wdata"] & 0xffffffff:08x}',
         f'insn      : 0x{p["insn"]:08x}  ; {mnem}',
-        f'rs1       : x{p["rs1_addr"]:02d}  rdata=0x{p["rs1_rdata"]:016x}',
-        f'rs2       : x{p["rs2_addr"]:02d}  rdata=0x{p["rs2_rdata"]:016x}',
-        f'rd        : x{p["rd_addr"]:02d}  wdata=0x{p["rd_wdata"]:016x}',
-        f'mem_addr  : 0x{p["mem_addr"]:016x}',
+    ]
+    # rs1 / rs2 lines: omit if the instruction has no source reg of
+    # that position (LUI/AUIPC/JAL have no rs1; I-type / U-type have
+    # no rs2). For x0 reads, show but note (always zero).
+    if decoded['has_rs1']:
+        out.append(f'rs1       : x{rs1:02d}  rdata=0x{p["rs1_rdata"] & 0xffffffff:08x}')
+    if decoded['has_rs2']:
+        out.append(f'rs2       : x{rs2:02d}  rdata=0x{p["rs2_rdata"] & 0xffffffff:08x}')
+    # rd line: show the packet's rd_addr (Sail populates this correctly
+    # and 0 means "no write committed" — matches RVFI semantics).
+    out.append(f'rd        : x{p["rd_addr"]:02d}  wdata=0x{p["rd_wdata"] & 0xffffffff:08x}')
+    out += [
+        f'mem_addr  : 0x{p["mem_addr"] & 0xffffffff:08x}',
         f'mem_rmask : {_mask_bits(p["mem_rmask"])}',
-        f'mem_rdata : 0x{p["mem_rdata"]:016x}',
+        f'mem_rdata : 0x{p["mem_rdata"] & 0xffffffff:08x}',
         f'mem_wmask : {_mask_bits(p["mem_wmask"])}',
-        f'mem_wdata : 0x{p["mem_wdata"]:016x}',
+        f'mem_wdata : 0x{p["mem_wdata"] & 0xffffffff:08x}',
     ]
     return '\n'.join(out) + '\n'
 
@@ -247,6 +296,19 @@ def convert(path_in: str, path_out: str, *, strict: bool = True) -> int:
     with open(path_out, 'w') as f:
         f.write(f'# RVFI v1 text trace — decoded from {op.basename(path_in)}\n')
         f.write(f'# {n} packet(s), 88 bytes each (see rvfi_to_text.py for schema)\n')
+        f.write('#\n')
+        f.write('# Display notes:\n')
+        f.write('#   pc/mem/rdata/wdata: shown as 32-bit (this Sail RVFI build is RV32)\n')
+        f.write('#   rs1 / rs2:          decoded from the insn encoding, NOT from the\n')
+        f.write('#                       packet bytes. The Sail RVFI model leaves\n')
+        f.write('#                       rs1_addr / rs2_addr at 0 (it only populates\n')
+        f.write('#                       rd_addr); using the encoded value gives the\n')
+        f.write('#                       correct source-register number every time.\n')
+        f.write('#   rs1_rdata/rs2_rdata: still the raw bytes from the packet. These\n')
+        f.write('#                       may be 0 even when the register held a\n')
+        f.write('#                       non-zero value — same Sail-side gap.\n')
+        f.write('#   rd_addr:            from the packet. 0 means "no write committed"\n')
+        f.write('#                       (true rd=x0, or trap suppressed the write).\n')
         f.write('#\n')
         for i in range(n):
             p = decode_packet(data[i * PACKET_SIZE:(i + 1) * PACKET_SIZE])
