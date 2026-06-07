@@ -85,20 +85,43 @@ _BRANCH_F3 = {
 _LOAD_F3  = {0b000: 'lb', 0b001: 'lh', 0b010: 'lw', 0b100: 'lbu', 0b101: 'lhu'}
 _STORE_F3 = {0b000: 'sb', 0b001: 'sh', 0b010: 'sw'}
 
-# CHERIoT Xcheri decode table (major opcode 0x5B, funct3=0).  Sources:
-# vengines/QuickCheckVEngine/src/RISCV/RV32_Xcheri.hs
-_XCHERI_INSPECT_F5 = {  # funct7=0x7f, encodes inspection ops
-    0x00: 'cgetperm', 0x01: 'cgettype', 0x02: 'cgetbase',
-    0x03: 'cgetlen',  0x04: 'cgettag',  0x05: 'cgetsealed',
-    0x0f: 'cgetaddr', 0x17: 'cgethigh', 0x18: 'cgettop',
-    0x0a: 'cmove',    0x0b: 'ccleartag',
+# CHERIoT Xcheri decode tables (major opcode 0x5B = 0b1011011, funct3=0).
+# All bit patterns ported directly from
+# vengines/QuickCheckVEngine/src/RISCV/RV32_Xcheri.hs (the *_raw lines).
+#
+# Inspection ops: encoded as `1111111 funct5 cs1 000 rd 1011011`, so
+# funct7 == 0x7f and the funct5 field overlaps the rs2 position.
+_XCHERI_INSPECT_F5 = {
+    0x00: 'cgetperm',  0x01: 'cgettype', 0x02: 'cgetbase',
+    0x03: 'cgetlen',   0x04: 'cgettag',
+    0x0a: 'cmove',     0x0b: 'ccleartag',
+    0x0f: 'cgetaddr',  0x12: 'cloadtags',
+    0x17: 'cgethigh',  0x18: 'cgettop',
 }
+# R-type ops: encoded as `funct7 rs2/cs2/cSP cs1 000 cd 1011011`.
+# Distinguished by funct7 (bits[31:25]).
 _XCHERI_R_F7 = {
-    0x00: 'csetbounds', 0x01: 'csetboundsexact',
-    0x09: 'csub',       0x10: 'candperm',
-    0x11: 'csetaddr',   0x13: 'csethigh',
-    0x14: 'cincaddr',
-    0x20: 'ctestsubset', 0x21: 'csetequalexact',
+    0x01: 'cspecialrw',         # encoded `0000001 cSP cs1 000 cd …`
+    0x08: 'csetbounds',         # `0001000 rs2 cs1 000 cd …`
+    0x09: 'csetboundsexact',    # `0001001 rs2 cs1 000 cd …`
+    0x0b: 'cseal',              # `0001011 cs2 cs1 000 cd …`
+    0x0c: 'cunseal',            # `0001100 cs2 cs1 000 cd …`
+    0x0d: 'candperm',           # `0001101 rs2 cs1 000 cd …`
+    0x10: 'csetaddr',           # `0010000 rs2 cs1 000 cd …`
+    0x11: 'cincaddr',           # `0010001 rs2 cs1 000 cd …`
+    0x14: 'csub',               # `0010100 cs2 cs1 000 cd …`
+    0x16: 'csethigh',           # `0010110 rs2 cs1 000 cd …`
+    0x20: 'ctestsubset',        # `0100000 cs2 cs1 000 rd …`
+    0x21: 'csetequalexact',     # `0100001 cs2 cs1 000 rd …`
+}
+# cspecialrw's rs2 field is an SCR (special capability register)
+# *index*, not a regular GPR number. Pretty-print it with the SCR name
+# instead of `x{n}` so the output matches what Sail's log emits.
+_XCHERI_SCR_NAMES = {
+    0: 'pcc',    1: 'ddc',
+    4: 'utcc',   5: 'utdc',   6: 'uscratchc',  7: 'uepcc',
+    12: 'stcc',  13: 'stdc',  14: 'sscratchc', 15: 'sepcc',
+    28: 'mtcc',  29: 'mtdc',  30: 'mscratchc', 31: 'mepcc',
 }
 
 
@@ -147,12 +170,32 @@ def _mnemonic(insn: int) -> str:
         return f'system.f3={f3}'
     if opcode == _RV_CHERIOT:
         if f3 == 0 and f7 == 0x7f:
-            f5 = rs2  # the funct5 field overlaps rs2 position
+            f5 = rs2  # the funct5 field overlaps the rs2 position
             m = _XCHERI_INSPECT_F5.get(f5, f'cheriot.inspect.f5=0x{f5:02x}')
+            # cgetperm / cgettype / cgetbase / cgetlen / cgettag /
+            # cgetaddr / cgethigh / cgetsealed write an integer rd.
+            # cmove / ccleartag / cgettop / cloadtags write a capability cd.
+            if m in {'cmove', 'ccleartag', 'cgettop', 'cloadtags'}:
+                return f'{m} cx{rd}, cx{rs1}'
             return f'{m} x{rd}, cx{rs1}'
         if f3 == 0:
             m = _XCHERI_R_F7.get(f7, f'cheriot.r.f7=0x{f7:02x}')
-            return f'{m} cx{rd}, cx{rs1}, x{rs2}'
+            # cspecialrw's rs2 is an SCR index, not a register. Pretty-
+            # print with the SCR name so the line matches Sail's own
+            # disassembly (e.g. "cspecialrw ca5, mscratchc, cnull").
+            if m == 'cspecialrw':
+                scr = _XCHERI_SCR_NAMES.get(rs2, f'scr{rs2}')
+                return f'cspecialrw cx{rd}, {scr}, cx{rs1}'
+            # ctestsubset and csetequalexact write an integer rd; the
+            # rest write a capability cd. Both forms read cs1; the
+            # third operand is rs2 (integer) for the "set-from-int"
+            # ops and cs2 (capability) for the rest.
+            int_rd_ops  = {'ctestsubset', 'csetequalexact'}
+            int_rs2_ops = {'csetbounds', 'csetboundsexact',
+                           'candperm', 'csetaddr', 'cincaddr', 'csethigh'}
+            d_pfx = 'x' if m in int_rd_ops else 'cx'
+            r_pfx = 'x' if m in int_rs2_ops else 'cx'
+            return f'{m} {d_pfx}{rd}, cx{rs1}, {r_pfx}{rs2}'
         if f3 == 1:
             return f'cincaddrimm cx{rd}, cx{rs1}, {imm_i}'
         if f3 == 2:
