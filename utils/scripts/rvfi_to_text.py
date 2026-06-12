@@ -249,7 +249,8 @@ _NO_RS1 = {0x37, 0x17, 0x6f}              # LUI / AUIPC / JAL
 # Instructions whose bits[24:20] are NOT rs2: I-type (loads, ALU-imm,
 # JALR, SYSTEM, FENCE), U-type, J-type, and CHERIoT's Xcheri opcode.
 _NO_RS2 = {0x03, 0x13, 0x67, 0x73, 0x0f,  # LOAD / OP-IMM / JALR / SYSTEM / FENCE
-           0x37, 0x17, 0x6f, 0x5b}        # LUI / AUIPC / JAL / Xcheri
+           0x37, 0x17, 0x6f}              # LUI / AUIPC / JAL
+#           0x37, 0x17, 0x6f, 0x5b}        # LUI / AUIPC / JAL / Xcheri
 
 
 def _decode_regs(insn32: int) -> dict:
@@ -304,12 +305,12 @@ def render_packet(p: dict, idx: int) -> str:
     # that position (LUI/AUIPC/JAL have no rs1; I-type / U-type have
     # no rs2). For x0 reads, show but note (always zero).
     if decoded['has_rs1']:
-        out.append(f'rs1       : x{rs1:02d}  rdata=0x{p["rs1_rdata"] & 0xffffffff:08x}')
+        out.append(f'rs1       : x{rs1:02d}  rdata=0x{p["rs1_rdata"] & 0xffff_ffff_ffff_ffff:016x}')
     if decoded['has_rs2']:
-        out.append(f'rs2       : x{rs2:02d}  rdata=0x{p["rs2_rdata"] & 0xffffffff:08x}')
+        out.append(f'rs2       : x{rs2:02d}  rdata=0x{p["rs2_rdata"] & 0xffff_ffff_ffff_ffff:016x}')
     # rd line: show the packet's rd_addr (Sail populates this correctly
     # and 0 means "no write committed" — matches RVFI semantics).
-    out.append(f'rd        : x{p["rd_addr"]:02d}  wdata=0x{p["rd_wdata"] & 0xffffffff:08x}')
+    out.append(f'rd        : x{p["rd_addr"]:02d}  wdata=0x{p["rd_wdata"] & 0xffff_ffff_ffff_ffff:016x}')
     out += [
         f'mem_addr  : 0x{p["mem_addr"] & 0xffffffff:08x}',
         f'mem_rmask : {_mask_bits(p["mem_rmask"])}',
