@@ -5,46 +5,59 @@ Decode Sail's binary RVFI v1 trace (``--rvfi-output <file>``) to a
 verbose, labeled text format — one instruction per record with every
 RVFI field on its own line, plus a lightweight mnemonic hint.
 
-The v1 on-wire layout is 88 bytes/packet, little-endian u64s followed
-by eight u8s.  Derived from QuickCheckVEngine's ``rvfiDecodeV1Response``
-(see ``vengines/QuickCheckVEngine/src/QuickCheckVEngine/RVFI_DII/RVFI.hs``).
-QCVEngine reverses the bytes first and reads big-endian; undoing that
-reverse gives us the on-wire little-endian layout below.
+The custom CHERIoT v1 on-wire layout used by this script is
+93 bytes/packet.  It keeps every field byte-aligned and widens the
+capability-capable data fields to 72 bits / 9 bytes.
 
   bytes 0-7    order      u64 LE
   bytes 8-15   pc_rdata   u64 LE
   bytes 16-23  pc_wdata   u64 LE
   bytes 24-31  insn       u64 LE  (low 32 bits hold the instruction)
-  bytes 32-39  rs1_rdata  u64 LE
-  bytes 40-47  rs2_rdata  u64 LE
-  bytes 48-55  rd_wdata   u64 LE
-  bytes 56-63  mem_addr   u64 LE
-  bytes 64-71  mem_rdata  u64 LE
-  bytes 72-79  mem_wdata  u64 LE
-  byte 80      mem_rmask  u8    (one bit per byte of mem_rdata)
-  byte 81      mem_wmask  u8    (one bit per byte of mem_wdata)
-  byte 82      rs1_addr   u8
-  byte 83      rs2_addr   u8
-  byte 84      rd_addr    u8
-  byte 85      trap       u8
-  byte 86      halt       u8
-  byte 87      intr       u8
+  bytes 32-40  rs1_rdata  u72 LE  (bits 71:65 padding, bit 64 tag, bits 63:0 payload)
+  bytes 41-49  rs2_rdata  u72 LE
+  bytes 50-58  rd_wdata   u72 LE
+  bytes 59-66  mem_addr   u64 LE
+  bytes 67-75  mem_rdata  u72 LE
+  bytes 76-84  mem_wdata  u72 LE
+  byte 85      mem_rmask  u8    (one bit per byte of mem_rdata payload)
+  byte 86      mem_wmask  u8    (one bit per byte of mem_wdata payload)
+  byte 87      rs1_addr   u8
+  byte 88      rs2_addr   u8
+  byte 89      rd_addr    u8
+  byte 90      trap       u8
+  byte 91      halt       u8
+  byte 92      intr       u8
 
-A halt packet (``halt != 0``) is written once at end-of-stream.  v1
-packets do not carry CHERI capability register data — for that the Sail
-binary would have to emit v2 packets (hard-coded to v1 today in
-``riscv_sim.c:75``).
+A halt packet (``halt != 0``) is written once at end-of-stream.
 """
 
 from __future__ import annotations
 
 import argparse
 import os.path as op
-import struct
 import sys
 
-PACKET_SIZE = 88
-_V1_STRUCT = struct.Struct('<10Q8B')  # 10 LE u64 + 8 u8 = 88 bytes
+PACKET_SIZE = 93
+U72_MASK = (1 << 72) - 1
+U64_MASK = (1 << 64) - 1
+U32_MASK = (1 << 32) - 1
+
+
+def _le_int(buf: bytes, off: int, size: int) -> int:
+    return int.from_bytes(buf[off:off + size], byteorder='little', signed=False)
+
+
+def _fmt_u72(v: int) -> str:
+    return f'0x{v & U72_MASK:018x}'
+
+
+def _fmt_u64(v: int) -> str:
+    return f'0x{v & U64_MASK:016x}'
+
+
+def _fmt_u32(v: int) -> str:
+    return f'0x{v & U32_MASK:08x}'
+
 
 
 # ---------------------------------------------------------------------------
@@ -217,22 +230,32 @@ def decode_packet(buf: bytes) -> dict:
     if len(buf) != PACKET_SIZE:
         raise ValueError(f'RVFI v1 packet must be {PACKET_SIZE} bytes, '
                          f'got {len(buf)}')
-    (order, pc_rdata, pc_wdata, insn,
-     rs1_rdata, rs2_rdata, rd_wdata,
-     mem_addr, mem_rdata, mem_wdata,
-     mem_rmask, mem_wmask,
-     rs1_addr, rs2_addr, rd_addr,
-     trap, halt, intr) = _V1_STRUCT.unpack(buf)
     return {
-        'order': order, 'halt': halt, 'trap': trap, 'intr': intr,
-        'pc_rdata': pc_rdata, 'pc_wdata': pc_wdata,
-        'insn': insn & 0xffffffff,
-        'rs1_addr': rs1_addr, 'rs1_rdata': rs1_rdata,
-        'rs2_addr': rs2_addr, 'rs2_rdata': rs2_rdata,
-        'rd_addr':  rd_addr,  'rd_wdata':  rd_wdata,
-        'mem_addr': mem_addr,
-        'mem_rmask': mem_rmask, 'mem_rdata': mem_rdata,
-        'mem_wmask': mem_wmask, 'mem_wdata': mem_wdata,
+        'order': _le_int(buf, 0, 8),
+        'pc_rdata': _le_int(buf, 8, 8),
+        'pc_wdata': _le_int(buf, 16, 8),
+        'insn': _le_int(buf, 24, 8) & U32_MASK,
+
+        # 72-bit byte-aligned data fields.  For capability values:
+        #   bits 71:65 = zero padding
+        #   bit  64    = tag
+        #   bits 63:0  = payload
+        'rs1_rdata': _le_int(buf, 32, 9),
+        'rs2_rdata': _le_int(buf, 41, 9),
+        'rd_wdata': _le_int(buf, 50, 9),
+
+        'mem_addr': _le_int(buf, 59, 8),
+        'mem_rdata': _le_int(buf, 67, 9),
+        'mem_wdata': _le_int(buf, 76, 9),
+
+        'mem_rmask': buf[85],
+        'mem_wmask': buf[86],
+        'rs1_addr': buf[87],
+        'rs2_addr': buf[88],
+        'rd_addr': buf[89],
+        'trap': buf[90],
+        'halt': buf[91],
+        'intr': buf[92],
     }
 
 
@@ -281,42 +304,41 @@ def render_packet(p: dict, idx: int) -> str:
     mnem = _mnemonic(p['insn'])
     decoded = _decode_regs(p['insn'])
 
-    # Display: bare rs1_addr / rs2_addr from the packet would be 0 for
-    # every instruction (Sail RVFI gap), so use the encoding-derived
-    # register numbers. We still show the packet's rs1_rdata / rs2_rdata
-    # verbatim — if those are 0 when they shouldn't be, that's a real
-    # Sail field-population gap visible to the user.
-    rs1, rs2, rd = decoded['rs1'], decoded['rs2'], decoded['rd']
+    # Display source/destination register numbers from the packet.
+    # _decode_regs() is still used only to decide whether a source register
+    # position exists for this instruction class, and for the mnemonic hint.
+    rs1, rs2 = p['rs1_addr'], p['rs2_addr']
 
-    # PC and data widths: this Sail binary is RV32, so the upper 32
-    # bits are always zero. Render PC as 8 hex digits and the data
-    # words as 8 hex digits each for readability (per request).
+    # PC/mem_addr are rendered as 32-bit addresses for this RV32 build.
+    # Data fields are rendered as full 72-bit values so the CHERIoT tag bit
+    # remains visible: bits 71:65 are padding, bit 64 is tag, bits 63:0 are
+    # the payload/value.
     out = [
         f'# --- RVFI packet {idx} ---',
         f'order     : {p["order"]}',
         f'halt      : 0x{p["halt"]:02x}',
         f'trap      : 0x{p["trap"]:02x}',
         f'intr      : 0x{p["intr"]:02x}',
-        f'pc_rdata  : 0x{p["pc_rdata"] & 0xffffffff:08x}',
-        f'pc_wdata  : 0x{p["pc_wdata"] & 0xffffffff:08x}',
+        f'pc_rdata  : {_fmt_u32(p["pc_rdata"])}',
+        f'pc_wdata  : {_fmt_u32(p["pc_wdata"])}',
         f'insn      : 0x{p["insn"]:08x}  ; {mnem}',
     ]
     # rs1 / rs2 lines: omit if the instruction has no source reg of
     # that position (LUI/AUIPC/JAL have no rs1; I-type / U-type have
-    # no rs2). For x0 reads, show but note (always zero).
+    # no rs2).
     if decoded['has_rs1']:
-        out.append(f'rs1       : x{rs1:02d}  rdata=0x{p["rs1_rdata"] & 0xffff_ffff_ffff_ffff:016x}')
+        out.append(f'rs1       : x{rs1:02d}  rdata={_fmt_u72(p["rs1_rdata"])}')
     if decoded['has_rs2']:
-        out.append(f'rs2       : x{rs2:02d}  rdata=0x{p["rs2_rdata"] & 0xffff_ffff_ffff_ffff:016x}')
+        out.append(f'rs2       : x{rs2:02d}  rdata={_fmt_u72(p["rs2_rdata"])}')
     # rd line: show the packet's rd_addr (Sail populates this correctly
     # and 0 means "no write committed" — matches RVFI semantics).
-    out.append(f'rd        : x{p["rd_addr"]:02d}  wdata=0x{p["rd_wdata"] & 0xffff_ffff_ffff_ffff:016x}')
+    out.append(f'rd        : x{p["rd_addr"]:02d}  wdata={_fmt_u72(p["rd_wdata"])}')
     out += [
-        f'mem_addr  : 0x{p["mem_addr"] & 0xffffffff:08x}',
+        f'mem_addr  : {_fmt_u32(p["mem_addr"])}',
         f'mem_rmask : {_mask_bits(p["mem_rmask"])}',
-        f'mem_rdata : 0x{p["mem_rdata"] & 0xffffffff:08x}',
+        f'mem_rdata : {_fmt_u72(p["mem_rdata"])}',
         f'mem_wmask : {_mask_bits(p["mem_wmask"])}',
-        f'mem_wdata : 0x{p["mem_wdata"] & 0xffffffff:08x}',
+        f'mem_wdata : {_fmt_u72(p["mem_wdata"])}',
     ]
     return '\n'.join(out) + '\n'
 
@@ -339,18 +361,15 @@ def convert(path_in: str, path_out: str, *, strict: bool = True) -> int:
     n = len(data) // PACKET_SIZE
     with open(path_out, 'w') as f:
         f.write(f'# RVFI v1 text trace — decoded from {op.basename(path_in)}\n')
-        f.write(f'# {n} packet(s), 88 bytes each (see rvfi_to_text.py for schema)\n')
+        f.write(f'# {n} packet(s), {PACKET_SIZE} bytes each (see rvfi_to_text.py for schema)\n')
         f.write('#\n')
         f.write('# Display notes:\n')
-        f.write('#   pc/mem/rdata/wdata: shown as 32-bit (this Sail RVFI build is RV32)\n')
-        f.write('#   rs1 / rs2:          decoded from the insn encoding, NOT from the\n')
-        f.write('#                       packet bytes. The Sail RVFI model leaves\n')
-        f.write('#                       rs1_addr / rs2_addr at 0 (it only populates\n')
-        f.write('#                       rd_addr); using the encoded value gives the\n')
-        f.write('#                       correct source-register number every time.\n')
-        f.write('#   rs1_rdata/rs2_rdata: still the raw bytes from the packet. These\n')
-        f.write('#                       may be 0 even when the register held a\n')
-        f.write('#                       non-zero value — same Sail-side gap.\n')
+        f.write('#   pc/mem_addr:         shown as 32-bit addresses for RV32 readability\n')
+        f.write('#   rs*/rd/mem data:    shown as full 72-bit byte-aligned fields\n')
+        f.write('#                       bits 71:65 are padding, bit 64 is tag,\n')
+        f.write('#                       bits 63:0 are the payload/value.\n')
+        f.write('#   rs1 / rs2 / rd:     register numbers are from the packet fields.\n')
+        f.write('#   rs1_rdata/rs2_rdata: raw 72-bit packet fields.\n')
         f.write('#   rd_addr:            from the packet. 0 means "no write committed"\n')
         f.write('#                       (true rd=x0, or trap suppressed the write).\n')
         f.write('#\n')

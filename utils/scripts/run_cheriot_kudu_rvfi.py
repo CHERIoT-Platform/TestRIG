@@ -89,8 +89,8 @@ def set_packet_field(packet, field, value):
     if value is None:
         return
 
-    if field in LOW64_FIELDS:
-        value &= MASK64
+    #if field in LOW64_FIELDS:
+    #    value &= MASK64
 
     setattr(packet, field, value)
 
