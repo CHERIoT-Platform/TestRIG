@@ -27,7 +27,7 @@ RVFI_PACKET_RE = re.compile(r"^\s*#\s*---\s*RVFI packet\s+([0-9]+)\s*---")
 RVFI_FIELD_RE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*:\s*(.*)$")
 HEX_RE = re.compile(r"0x([0-9a-fA-F]+)")
 DEC_RE = re.compile(r"\b([0-9]+)\b")
-MASK64 = (1 << 64) - 1
+MASK72 = (1 << 72) - 1
 
 COMPARE_FIELDS = [
     "packet_num",
@@ -43,7 +43,7 @@ COMPARE_FIELDS = [
     "mem_wmask",
 ]
 
-LOW64_FIELDS = set(["rd_wdata", "mem_rdata", "mem_wmask"])
+LOW72_FIELDS = set(["rd_wdata", "mem_rdata", "mem_wmask"])
 
 
 @dataclass
@@ -118,14 +118,6 @@ def parse_rvfi_field(packet, field, rest):
         set_packet_field(packet, "rd", parse_int(rest))
         return
 
-    if field == "mem":
-        for attr in ("addr", "rmask", "rdata", "wmask"):
-            value = parse_named_int(rest, attr)
-            if attr == "addr":
-                set_packet_field(packet, "mem_addr", value)
-            else:
-                set_packet_field(packet, "mem_{}".format(attr), value)
-
 
 def iter_rvfi_packets(path):
     packet = None
@@ -170,8 +162,8 @@ def fmt_int(field, value):
     if field == "insn":
         return "0x{:08x}".format(value)
 
-    if field in ("rd_wdata", "mem_rdata", "mem_wmask"):
-        return "0x{:016x}".format(value & MASK64)
+    if field in ("rd_wdata", "mem_rdata", "mem_wdata"):
+        return "0x{:018x}".format(value & MASK72)
 
     return "0x{:x}".format(value)
 
