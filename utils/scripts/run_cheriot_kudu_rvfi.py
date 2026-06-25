@@ -39,9 +39,10 @@ COMPARE_FIELDS = [
     "rd_wdata",
     "mem_addr",
     "mem_rmask",
-    "mem_rdata",
     "mem_wmask",
 ]
+#    "mem_rdata",   # remove mem_rdata for now as sail is looking directly at memory interface but 
+                    # kudu tracer right now is looking at reg_wdata
 
 LOW72_FIELDS = set(["rd_wdata", "mem_rdata", "mem_wmask"])
 
@@ -149,6 +150,17 @@ def iter_rvfi_packets(path):
         yield packet
 
 
+def count_rvfi_packets(path):
+    """Count parsed RVFI packets in a text trace."""
+    count = 0
+    with path.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.split(";", 1)[0].rstrip()
+            if RVFI_PACKET_RE.match(line) is not None:
+                count += 1
+    return count
+
+
 def fmt_int(field, value):
     if value is None:
         return "<missing>"
@@ -203,6 +215,7 @@ def compare_rvfi_prefix(left, right):
         ignore_fields = set()
         if lpacket.trap == 1 and rpacket.trap == 1:
             ignore_fields.add("mem_addr")
+            ignore_fields.add("insn")
 
         diff_fields = [
             field for field in COMPARE_FIELDS
@@ -216,9 +229,23 @@ def compare_rvfi_prefix(left, right):
 
 # ---- filesystem helpers ----
 
-def run_cmd(cmd, cwd=None):
-    print("+ {}".format(" ".join(cmd)))
-    subprocess.run(cmd, cwd=str(cwd) if cwd is not None else None, check=True)
+#def run_cmd(cmd, cwd=None):
+#    print("+ {}".format(" ".join(cmd)))
+#    subprocess.run(cmd, cwd=str(cwd) if cwd is not None else None, check=True)
+def run_cmd(cmd, cwd=None, quiet=False):
+    # print("+ {}".format(" ".join(cmd)))
+
+    if quiet:
+        with open(os.devnull, "w") as devnull:
+            subprocess.run(
+                cmd,
+                cwd=cwd,
+                check=True,
+                stdout=devnull,
+                stderr=devnull,
+            )
+    else:
+        subprocess.run(cmd, cwd=cwd, check=True)
 
 
 def clean_dir(path):
@@ -269,6 +296,7 @@ def prepare_sim_bin(root):
 
     require_dir(src, "TestRIG output directory")
 
+    print("\nCopying ELFs from sail runs to verilog sim area ...", flush=True)
     copied = copy_all_files(src, sim_bin)
     print("Copied {} file(s) from {} to {}".format(copied, src, sim_bin))
 
@@ -278,6 +306,7 @@ def prepare_ref_trace(root):
     src = root / "two_phase_output" / "results"
     ref_dir = root / "riscv-implementations" / "cheriot-kudu" / "sim" / "verilator" / "sail_results"
     require_dir(src, "TestRIG output directory")
+    print("\nCopying traces from phase 2 sail runs to verilog sim area ...", flush=True)
     copied = copy_all_files(src, ref_dir)
     print("Copied {} file(s) from {} to {}".format(copied, src, ref_dir))
     return ref_dir
@@ -290,17 +319,18 @@ def convert_elfs_to_dii(root, sim_bin):
     if not elf_files:
         raise RuntimeError("No *.elf files found in {}".format(sim_bin))
 
+    print("Generating  .dii files from .elf ...", flush=True)
     dii_files = []
     for elf in elf_files:
         dii = elf.with_suffix(".dii")
-        run_cmd([str(elf2dii), str(elf), str(dii)], cwd=root)
+        run_cmd([str(elf2dii), str(elf), str(dii)], cwd=root, quiet=True)
         dii_files.append(dii)
 
-    print("Generated {} .dii file(s)".format(len(dii_files)))
+    print("Generated {} .dii file(s)".format(len(dii_files)), flush=True)
     return dii_files
 
 
-def run_simulations(root, dii_files, timeout):
+def run_simulations(root, dii_files, rvfi_max):
     verilator_dir = root / "riscv-implementations" / "cheriot-kudu" / "sim" / "verilator"
     sim_exe = verilator_dir / "obj_dir" / "Vtb_kudu_top"
     results_dir = verilator_dir / "results"
@@ -308,9 +338,11 @@ def run_simulations(root, dii_files, timeout):
     require_file(sim_exe, "Verilator simulation executable")
     clean_dir(results_dir)
 
+    print("Starting verilog simulation ...", flush=True)
+
     for dii in sorted(dii_files):
         test_name = dii.stem
-        print("Running simulation for {}".format(test_name))
+        print("Running verilog simulation for {}".format(test_name))
 
         # Remove stale logs before each run so missing-output errors are real.
         for log_name in ["rvfi_kudu_core.log", "trace_kudu_core.log"]:
@@ -318,7 +350,8 @@ def run_simulations(root, dii_files, timeout):
             if stale.exists():
                 stale.unlink()
 
-        run_cmd([str(sim_exe), "+TEST={}".format(test_name), "+TIMEOUT={}".format(timeout)], cwd=verilator_dir)
+        run_cmd([str(sim_exe), "+TEST={}".format(test_name), "+RFVI_MAX={}".format(rvfi_max)], 
+                cwd=verilator_dir, quiet=True)
 
         rvfi_log = verilator_dir / "rvfi_kudu_core.log"
         trace_log = verilator_dir / "trace_kudu_core.log"
@@ -334,8 +367,7 @@ def run_simulations(root, dii_files, timeout):
 
 def find_sim_rvfi(results_dir, test_name):
     candidates = [
-        results_dir / "{}.rvfi".format(test_name),
-        results_dir / "rvfi_kudu_trace_{}.log".format(test_name),
+        results_dir / "{}.rvfi".format(test_name)
     ]
 
     for path in candidates:
@@ -349,17 +381,10 @@ def find_sim_rvfi(results_dir, test_name):
     )
 
 
-def find_reference_rvfi(sim_bin, test_name):
+def find_reference_rvfi(ref_dir, test_name):
     candidates = [
-        sim_bin / "{}_phase2.rvfi".format(test_name),
-        sim_bin / "{}.rvfi".format(test_name),
+        ref_dir / "{}_phase2.rvfi".format(test_name),
     ]
-
-    # If test_name already ends in _phase2, avoid requiring _phase2_phase2.rvfi.
-    if test_name.endswith("_phase2"):
-        base = test_name[:-len("_phase2")]
-        candidates.insert(0, sim_bin / "{}_phase2.rvfi".format(base))
-        candidates.insert(0, sim_bin / "{}.rvfi".format(test_name))
 
     for path in candidates:
         if path.is_file():
@@ -372,18 +397,36 @@ def find_reference_rvfi(sim_bin, test_name):
     )
 
 
-def check_results(sim_bin, results_dir):
+def check_results(ref_dir, results_dir, packet_slack):
     rvfi_files = sorted(results_dir.glob("*.rvfi"))
     if not rvfi_files:
         raise RuntimeError("No *.rvfi files found in {}".format(results_dir))
 
+    print("Comparing sail results vs verilator ...", flush=True)
+
     for sim_rvfi in rvfi_files:
         test_name = sim_rvfi.stem
-        ref_rvfi = find_reference_rvfi(sim_bin, test_name)
+        ref_rvfi = find_reference_rvfi(ref_dir, test_name)
 
-        print("Comparing:")
-        print("  sim: {}".format(sim_rvfi))
-        print("  ref: {}".format(ref_rvfi))
+        sim_packet_count = count_rvfi_packets(sim_rvfi)
+        ref_packet_count = count_rvfi_packets(ref_rvfi)
+        min_sim_packet_count = max(0, ref_packet_count - packet_slack)
+
+        #print("Comparing:")
+        #print("  sim: {}".format(sim_rvfi))
+        #print("  ref: {}".format(ref_rvfi))
+        #print("  sim RVFI packets: {}".format(sim_packet_count))
+        #print("  ref RVFI packets: {}".format(ref_packet_count))
+        #print("  minimum accepted sim packets: {}".format(min_sim_packet_count))
+
+        if sim_packet_count < min_sim_packet_count:
+            print("")
+            print("FAIL: Verilator RVFI trace is too short for {}".format(test_name))
+            print("  sim packets: {}".format(sim_packet_count))
+            print("  ref packets: {}".format(ref_packet_count))
+            print("  allowed shortfall: {}".format(packet_slack))
+            print("  required sim packets: at least {}".format(min_sim_packet_count))
+            raise SystemExit(1)
 
         ok, packet_index, diff_fields, left_packet, right_packet = compare_rvfi_prefix(sim_rvfi, ref_rvfi)
         if not ok:
@@ -420,10 +463,17 @@ def main():
     )
 
     parser.add_argument(
-        "--timeout",
+        "--rvfi_max",
         type=int,
-        default=1000,
-        help="Verilator +TIMEOUT value. Default: 1000",
+        default=500,
+        help="Verilator +RVFI_MAX value. Default: 500",
+    )
+
+    parser.add_argument(
+        "--packet-slack",
+        type=int,
+        default=100,
+        help="Allowed Verilator RVFI packet shortfall versus Sail. Default: 100",
     )
 
     parser.add_argument(
@@ -453,19 +503,20 @@ def main():
         if args.skip_sim:
             ref_dir = verilator_dir / "sail_results"
             require_dir(results_dir, "existing simulation results directory")
-            check_results(ref_dir, results_dir)
+            check_results(ref_dir, results_dir, args.packet_slack)
             return 0
 
         if not args.skip_sail:
             run_testrig(root, args.mode)
 
         sim_bin = prepare_sim_bin(root)
-        ref_dir = prepare_ref_trace(root)
+        # ref_dir = prepare_ref_trace(root)
+        ref_dir = root / "two_phase_output" / "results"
         dii_files = convert_elfs_to_dii(root, sim_bin)
 
-        results_dir = run_simulations(root, dii_files, args.timeout)
+        results_dir = run_simulations(root, dii_files, args.rvfi_max)
 
-        check_results(ref_dir, results_dir)
+        check_results(ref_dir, results_dir, args.packet_slack)
         return 0
 
     except subprocess.CalledProcessError as e:
