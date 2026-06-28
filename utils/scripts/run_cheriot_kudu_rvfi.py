@@ -27,6 +27,7 @@ RVFI_PACKET_RE = re.compile(r"^\s*#\s*---\s*RVFI packet\s+([0-9]+)\s*---")
 RVFI_FIELD_RE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*:\s*(.*)$")
 HEX_RE = re.compile(r"0x([0-9a-fA-F]+)")
 DEC_RE = re.compile(r"\b([0-9]+)\b")
+BIN_RE = re.compile(r"0b([01_]+)")
 MASK72 = (1 << 72) - 1
 
 COMPARE_FIELDS = [
@@ -40,11 +41,10 @@ COMPARE_FIELDS = [
     "mem_addr",
     "mem_rmask",
     "mem_wmask",
+    "mem_wdata"
 ]
 #    "mem_rdata",   # remove mem_rdata for now as sail is looking directly at memory interface but 
                     # kudu tracer right now is looking at reg_wdata
-
-LOW72_FIELDS = set(["rd_wdata", "mem_rdata", "mem_wmask"])
 
 
 @dataclass
@@ -60,12 +60,17 @@ class RvfiPacket:
     mem_rmask: Optional[int] = None
     mem_rdata: Optional[int] = None
     mem_wmask: Optional[int] = None
+    mem_wdata: Optional[int] = None
 
 
 def parse_int(text):
     hex_match = HEX_RE.search(text)
     if hex_match is not None:
         return int(hex_match.group(1), 16)
+
+    bin_match = BIN_RE.search(text)
+    if bin_match is not None:
+        return int(bin_match.group(1).replace("_", ""), 2)
 
     dec_match = DEC_RE.search(text)
     if dec_match is not None:
@@ -90,14 +95,11 @@ def set_packet_field(packet, field, value):
     if value is None:
         return
 
-    #if field in LOW64_FIELDS:
-    #    value &= MASK64
-
     setattr(packet, field, value)
 
 
 def parse_rvfi_field(packet, field, rest):
-    if field in ("trap", "intr", "pc_rdata", "insn", "mem_addr", "mem_rmask", "mem_rdata", "mem_wmask"):
+    if field in ("trap", "intr", "pc_rdata", "insn", "mem_addr", "mem_rmask", "mem_rdata", "mem_wmask", "mem_wdata"):
         set_packet_field(packet, field, parse_int(rest))
         return
 
@@ -186,6 +188,31 @@ def format_rvfi_packet(packet):
         for field in COMPARE_FIELDS
     )
 
+def mask_packet_mem_data(packet):
+    """Post-process memory data fields before comparison.
+
+    After this runs:
+      mem_rdata only contains bytes enabled by mem_rmask.
+      mem_wdata only contains bytes enabled by mem_wmask.
+
+    Special case:
+      mask 0xff -> keep full parsed value unchanged
+    """
+    if packet.mem_rdata is not None and packet.mem_rmask is not None:
+        if packet.mem_rmask != 0xff:
+            data_mask = 0
+            for byte_index in range(8):
+                if packet.mem_rmask & (1 << byte_index):
+                    data_mask |= 0xff << (8 * byte_index)
+            packet.mem_rdata &= data_mask
+
+    if packet.mem_wdata is not None and packet.mem_wmask is not None:
+        if packet.mem_wmask != 0xff:
+            data_mask = 0
+            for byte_index in range(8):
+                if packet.mem_wmask & (1 << byte_index):
+                    data_mask |= 0xff << (8 * byte_index)
+            packet.mem_wdata &= data_mask
 
 def compare_rvfi_prefix(left, right):
     """
@@ -216,6 +243,9 @@ def compare_rvfi_prefix(left, right):
         if lpacket.trap == 1 and rpacket.trap == 1:
             ignore_fields.add("mem_addr")
             ignore_fields.add("insn")
+
+        mask_packet_mem_data(lpacket)
+        mask_packet_mem_data(rpacket)
 
         diff_fields = [
             field for field in COMPARE_FIELDS
@@ -312,21 +342,14 @@ def prepare_ref_trace(root):
     return ref_dir
 
 def convert_elfs_to_dii(root, sim_bin):
-    elf2dii = root / "riscv-implementations" / "cheriot-kudu" / "sim" / "scripts" / "elf2dii.py"
-    require_file(elf2dii, "elf2dii.py")
-
-    elf_files = sorted(sim_bin.glob("*.elf"))
-    if not elf_files:
-        raise RuntimeError("No *.elf files found in {}".format(sim_bin))
+    elf2dii = root / "utils" / "scripts" / "elf2dii_batch.py"
+    require_file(elf2dii, "elf2dii_batch.py")
 
     print("Generating  .dii files from .elf ...", flush=True)
-    dii_files = []
-    for elf in elf_files:
-        dii = elf.with_suffix(".dii")
-        run_cmd([str(elf2dii), str(elf), str(dii)], cwd=root, quiet=True)
-        dii_files.append(dii)
+    clean_dir(sim_bin)
+    run_cmd([str(elf2dii)], cwd=root, quiet=False)
 
-    print("Generated {} .dii file(s)".format(len(dii_files)), flush=True)
+    dii_files = sorted(sim_bin.glob("*.dii"));
     return dii_files
 
 
@@ -509,7 +532,7 @@ def main():
         if not args.skip_sail:
             run_testrig(root, args.mode)
 
-        sim_bin = prepare_sim_bin(root)
+        # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)
         ref_dir = root / "two_phase_output" / "results"
         dii_files = convert_elfs_to_dii(root, sim_bin)
