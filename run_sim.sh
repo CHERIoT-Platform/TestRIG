@@ -26,9 +26,9 @@ print_summary() {
     echo "Last wrapper run             : ${CURRENT_RUN}"
   fi
 
-  if [ -n "${LAST_VERILOG_CASE}" ]; then
-    echo "Last Verilog sim case        : ${LAST_VERILOG_CASE}"
-  fi
+  #if [ -n "${LAST_VERILOG_CASE}" ]; then
+  #  echo "Last Verilog sim case        : ${LAST_VERILOG_CASE}"
+  #fi
 }
 
 trap print_summary EXIT
@@ -58,10 +58,10 @@ for ((i = 1; i <= N; i++)); do
   # Count Verilog simulation cases from the wrapper output.
   # Expected line format:
   #   Running verilog simulation for trace_001
-  run_verilog_cases="$(grep -c '^Running verilog simulation for ' "$tmp_log" || true)"
+  run_verilog_cases="$(grep -c 'Vtb_kudu_top\s*+TEST=' "$tmp_log" || true)"
   VERILOG_SIM_CASES=$((VERILOG_SIM_CASES + run_verilog_cases))
 
-  last_case_line="$(grep '^Running verilog simulation for ' "$tmp_log" | tail -n 1 || true)"
+  last_case_line="$(grep 'Vtb_kudu_top\s*+TEST=' "$tmp_log" | tail -n 1 || true)"
   if [ -n "$last_case_line" ]; then
     LAST_VERILOG_CASE="${last_case_line#Running verilog simulation for }"
   fi

@@ -13,6 +13,7 @@ Modes:
 import argparse
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -267,7 +268,12 @@ def compare_rvfi_prefix(left, right):
 #    print("+ {}".format(" ".join(cmd)))
 #    subprocess.run(cmd, cwd=str(cwd) if cwd is not None else None, check=True)
 def run_cmd(cmd, cwd=None, quiet=False):
-    # print("+ {}".format(" ".join(cmd)))
+    printable_cmd = list(str(x) for x in cmd)
+    if printable_cmd:
+        printable_cmd[0] = os.path.basename(printable_cmd[0])
+
+    print("+ {}".format(shlex.join(printable_cmd)))
+    #print("+ {}".format(" ".join(cmd)))
 
     if quiet:
         with open(os.devnull, "w") as devnull:
@@ -369,7 +375,7 @@ def run_simulations(root, dii_files, rvfi_max):
 
     for dii in sorted(dii_files):
         test_name = dii.stem
-        print("Running verilog simulation for {}".format(test_name))
+        # print("Running verilog simulation for {}".format(test_name))
 
         # Remove stale logs before each run so missing-output errors are real.
         for log_name in ["rvfi_kudu_core.log", "trace_kudu_core.log"]:
@@ -377,7 +383,8 @@ def run_simulations(root, dii_files, rvfi_max):
             if stale.exists():
                 stale.unlink()
 
-        run_cmd([str(sim_exe), "+TEST={}".format(test_name), "+RFVI_MAX={}".format(rvfi_max)], 
+        run_cmd([str(sim_exe), "+TEST={}".format(test_name), "+RFVI_MAX={}".format(rvfi_max), 
+                "+INSTR_GNT_WMAX=2 +INSTR_RESP_WMAX=1 +DATA_GNT_WMAX=2 +DATA_RESP_WMAX=1"],
                 cwd=verilator_dir, quiet=True)
 
         rvfi_log = verilator_dir / "rvfi_kudu_core.log"
