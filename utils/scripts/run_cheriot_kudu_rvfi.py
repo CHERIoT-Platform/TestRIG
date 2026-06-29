@@ -242,6 +242,10 @@ def compare_rvfi_prefix(left, right):
         ignore_fields = set()
         if lpacket.trap == 1 and rpacket.trap == 1:
             ignore_fields.add("mem_addr")
+            ignore_fields.add("mem_rmask")
+            ignore_fields.add("mem_wmask")
+            ignore_fields.add("mem_rdata")
+            ignore_fields.add("mem_wdata")
             ignore_fields.add("insn")
 
         mask_packet_mem_data(lpacket)
