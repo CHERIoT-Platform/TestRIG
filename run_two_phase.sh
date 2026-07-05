@@ -19,7 +19,7 @@
 set -euo pipefail
 
 COUNT=10
-INSTRUCTIONS=50
+INSTRUCTIONS=100
 ARCHITECTURE="rv32ecZifencei_Xcheriot"
 WORK_DIR="./two_phase_output"
 SEED=""

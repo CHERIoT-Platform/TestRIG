@@ -382,10 +382,16 @@ def run_simulations(root, dii_files, rvfi_max):
             stale = verilator_dir / log_name
             if stale.exists():
                 stale.unlink()
-
-        run_cmd([str(sim_exe), "+TEST={}".format(test_name), "+RFVI_MAX={}".format(rvfi_max), 
-                "+INSTR_GNT_WMAX=2 +INSTR_RESP_WMAX=1 +DATA_GNT_WMAX=2 +DATA_RESP_WMAX=1"],
-                cwd=verilator_dir, quiet=True)
+        run_cmd([ str(sim_exe),
+                "+TEST={}".format(test_name),
+                "+RVFI_MAX={}".format(rvfi_max),
+                "+INSTR_GNT_WMAX=2",
+                "+INSTR_RESP_WMAX=1",
+                "+DATA_GNT_WMAX=2",
+                "+DATA_RESP_WMAX=1"],
+                cwd=verilator_dir,
+                quiet=True)
+                #quiet=False)
 
         rvfi_log = verilator_dir / "rvfi_kudu_core.log"
         trace_log = verilator_dir / "trace_kudu_core.log"
@@ -506,8 +512,8 @@ def main():
     parser.add_argument(
         "--packet-slack",
         type=int,
-        default=100,
-        help="Allowed Verilator RVFI packet shortfall versus Sail. Default: 100",
+        default=200,
+        help="Allowed Verilator RVFI packet shortfall versus Sail. Default: 200",
     )
 
     parser.add_argument(

@@ -519,6 +519,7 @@ writeHexTrace path label archDesc' instrs = do
       lineFor i@(MkInstruction v) =
         printf "0x%08x    # %s\n" (fromInteger v :: Word32) (rv_pretty i)
       -- ebreak: 0x00100073 (opcode SYSTEM, funct12=1).
-      terminator = "0x00100073    # ebreak (terminator)\n"
+      -- terminator = "0x00100073    # ebreak (terminator)\n"
       body       = concatMap lineFor instrs
-  writeFile path (header ++ body ++ terminator)
+  --writeFile path (header ++ body ++ terminator)
+  writeFile path (header ++ body)

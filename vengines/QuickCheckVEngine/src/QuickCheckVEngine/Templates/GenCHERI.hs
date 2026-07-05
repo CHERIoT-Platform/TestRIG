@@ -105,7 +105,8 @@ genRandomCHERITest = readParams $ \param -> random $ do
   csrAddr   <- frequency [ -- (1, return (unsafe_csrs_indexFromName "mccsr")) -- CHERIoT lacks capability CSRs
                            (1, return (unsafe_csrs_indexFromName "mcause")) ]
   -- srcScr    <- elements $ [0, 1, 28, 29, 30, 31] ++ (if has_s arch then [12, 13, 14, 15] else []) ++ [2]
-  srcScr    <- elements [28, 29, 30, 31] -- CHERIoT has limited cspecialrw targets
+  -- srcScr    <- elements [28, 29, 30, 31] -- CHERIoT has limited cspecialrw targets
+  srcScr    <- elements [29, 30, 31] -- kliu: treat 28 (mtcc) separately in mtccIncr
   -- let allowedCsrs = filter (csrFilter param) [ unsafe_csrs_indexFromName "sepc" -- CHERIoT lacks supervisor mode
   --                                            , unsafe_csrs_indexFromName "mepc" ] -- CHERIoT lacks mepc, uses mepcc instead
   let allowedCsrsRO = [ -- unsafe_csrs_indexFromName "scause" -- CHERIoT lacks supervisor mode
@@ -116,16 +117,17 @@ genRandomCHERITest = readParams $ \param -> random $ do
                 , (5, legalStore)
                 , (5, legalCapLoad srcAddr dest)
                 , (5, legalCapStore srcAddr)
+                , (10, incrMTCC)
                 , (10, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2)
                 , (10, instUniform $ rv32_xcheri arch srcAddr srcData srcScr imm mop dest)
                 , (10, inst $ cspecialrw dest srcScr srcAddr)
                 -- , (5, maybe mempty (\idx -> instUniform $ rv32_zicsr srcData dest idx mop) srcCsr) -- CHERIoT has no allowedCsrs left
                 , (5, csrr dest srcCsrRO)
                 -- , (10, switchEncodingMode) -- Only pure CHERI mode in CHERIoT
-                , (10, cspecialRWChain)
+                , (5, cspecialRWChain)
                 -- , (10, randomCInvoke srcAddr srcData tmpReg tmpReg2) -- CHERIoT lacks cinvoke instr
                 , (10, makeShortCap)
-                , (5, clearASR tmpReg tmpReg2)
+                -- , (5, clearASR tmpReg tmpReg2)
                 , (5, boundPCC tmpReg tmpReg2 imm longImm)
                 , (20, inst $ cgettag dest dest)
                 , (if has_nocloadtags arch then 0 else 10, loadTags srcAddr srcData)

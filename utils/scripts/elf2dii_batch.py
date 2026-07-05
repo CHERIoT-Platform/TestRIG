@@ -8,7 +8,9 @@ Default behavior:
        ./two_phase_output/results/trace_NNN_phase2.rvfi
      with fallback:
        ./two_phase_output/trace_NNN_phase2.rvfi
-  3. Check whether any RVFI memory write overlaps the ELF-loaded memory bytes.
+  3. Check whether any RVFI memory write overlaps protected memory bytes:
+       - ELF-loaded memory bytes
+       - instruction bytes executed in the Sail RVFI trace, derived from pc_rdata/insn
      A memory write is any packet with mem_wmask != 0.
   4. If conflict is found, print an error and do not generate that .dii file.
   5. Otherwise write:
@@ -142,30 +144,26 @@ def wmask_to_write_ranges(mem_addr, mem_wmask):
     if active_start is not None:
         ranges.append((active_start, active_end))
 
+    # Debug only:
+    # print("write ranges = {}".format(
+    #     ["[0x{:x},0x{:x})".format(s, e) for s, e in ranges]
+    # ))
+
     return ranges
 
 
-def find_rvfi_conflict(rvfi_path, elf_ranges):
-    """Return conflict info or None."""
-    packet_num = None
-    mem_addr = None
-    mem_wmask = None
+def iter_rvfi_packets(rvfi_path):
+    """Yield parsed RVFI packets with pc_rdata, insn, mem_addr, and mem_wmask."""
+    packet = None
 
-    def check_current_packet():
-        if mem_wmask is None or mem_wmask == 0:
-            return None
-
-        for wstart, wend in wmask_to_write_ranges(mem_addr, mem_wmask):
-            if ranges_overlap(wstart, wend, elf_ranges):
-                return {
-                    "packet_num": packet_num,
-                    "mem_addr": mem_addr,
-                    "mem_wmask": mem_wmask,
-                    "write_start": wstart,
-                    "write_end": wend,
-                }
-
-        return None
+    def new_packet(packet_num):
+        return {
+            "packet_num": packet_num,
+            "pc_rdata": None,
+            "insn": None,
+            "mem_addr": None,
+            "mem_wmask": None,
+        }
 
     with open(rvfi_path, "r", encoding="utf-8", errors="replace") as f:
         for raw_line in f:
@@ -175,29 +173,93 @@ def find_rvfi_conflict(rvfi_path, elf_ranges):
 
             packet_match = RVFI_PACKET_RE.match(line)
             if packet_match is not None:
-                conflict = check_current_packet()
-                if conflict is not None:
-                    return conflict
+                if packet is not None:
+                    yield packet
 
-                packet_num = int(packet_match.group(1), 10)
-                mem_addr = None
-                mem_wmask = None
+                packet = new_packet(int(packet_match.group(1), 10))
                 continue
 
             field_match = RVFI_FIELD_RE.match(line)
-            if field_match is None:
+            if field_match is None or packet is None:
                 continue
 
             field, rest = field_match.groups()
             field = field.strip().lower()
             rest = rest.strip()
 
-            if field == "mem_addr":
-                mem_addr = parse_int(rest)
+            if field == "pc_rdata":
+                packet["pc_rdata"] = parse_int(rest)
+            elif field == "insn":
+                packet["insn"] = parse_int(rest)
+            elif field == "mem_addr":
+                packet["mem_addr"] = parse_int(rest)
             elif field == "mem_wmask":
-                mem_wmask = parse_int(rest)
+                packet["mem_wmask"] = parse_int(rest)
 
-    return check_current_packet()
+    if packet is not None:
+        yield packet
+
+
+def rvfi_pc_ranges_from_packets(packets):
+    """Return executed instruction byte ranges derived from RVFI pc_rdata/insn."""
+    ranges = []
+
+    for packet in packets:
+        pc_rdata = packet["pc_rdata"]
+        insn = packet["insn"]
+
+        if pc_rdata is None or insn is None:
+            continue
+
+        insn_size = 4 if (insn & 0x3) == 0x3 else 2
+        ranges.append((pc_rdata, pc_rdata + insn_size))
+
+    return merge_ranges(ranges)
+
+
+def find_rvfi_conflict(rvfi_path, elf_ranges):
+    """Return conflict info or None.
+
+    Protect both ELF-loaded bytes and instruction bytes executed according to
+    RVFI pc_rdata/insn.
+    """
+    packets = list(iter_rvfi_packets(rvfi_path))
+    pc_ranges = rvfi_pc_ranges_from_packets(packets)
+    protected_ranges = merge_ranges(list(elf_ranges) + list(pc_ranges))
+
+    # Debug only:
+    # print("  ELF ranges:")
+    # for start, end in elf_ranges:
+    #     print("    [0x{:x}, 0x{:x})".format(start, end))
+    # print("  RVFI PC ranges:")
+    # for start, end in pc_ranges:
+    #     print("    [0x{:x}, 0x{:x})".format(start, end))
+
+    for packet in packets:
+        mem_addr = packet["mem_addr"]
+        mem_wmask = packet["mem_wmask"]
+
+        if mem_wmask is None or mem_wmask == 0:
+            continue
+
+        for wstart, wend in wmask_to_write_ranges(mem_addr, mem_wmask):
+            if ranges_overlap(wstart, wend, protected_ranges):
+                conflict_kind = "unknown"
+                if ranges_overlap(wstart, wend, elf_ranges):
+                    conflict_kind = "elf"
+                elif ranges_overlap(wstart, wend, pc_ranges):
+                    conflict_kind = "rvfi_pc"
+
+                return {
+                    "packet_num": packet["packet_num"],
+                    "mem_addr": mem_addr,
+                    "mem_wmask": mem_wmask,
+                    "write_start": wstart,
+                    "write_end": wend,
+                    "conflict_kind": conflict_kind,
+                }
+
+    return None
 
 
 def elf_to_mem16(elf_path, out_path, x_name="X", use_paddr=True, include_bss=True):
@@ -261,10 +323,13 @@ def format_conflict(conflict):
     packet = conflict["packet_num"]
     packet_text = "<unknown>" if packet is None else str(packet)
 
+    kind = conflict.get("conflict_kind", "unknown")
+
     return (
-        "packet={}, mem_addr=0x{:x}, mem_wmask=0x{:x}, "
+        "kind={}, packet={}, mem_addr=0x{:x}, mem_wmask=0x{:x}, "
         "written_range=[0x{:x}, 0x{:x})"
     ).format(
+        kind,
         packet_text,
         conflict["mem_addr"] if conflict["mem_addr"] is not None else 0,
         conflict["mem_wmask"] if conflict["mem_wmask"] is not None else 0,

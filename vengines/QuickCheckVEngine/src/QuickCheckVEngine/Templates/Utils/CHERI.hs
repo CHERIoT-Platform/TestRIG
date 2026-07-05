@@ -44,6 +44,7 @@ module QuickCheckVEngine.Templates.Utils.CHERI (
 -- , loadRegion -- Unused, so not fully updating for CHERIoT
 -- , switchEncodingMode
 , cspecialRWChain
+, incrMTCC
 , tagCacheTest
 , genCHERIinspection
 , genCHERIarithmetic
@@ -101,7 +102,7 @@ clearASR tmp1 tmp2 = instSeq [ -- cspecialrw tmp1 0 0, -- Get PCC -- CHERIoT can
                                candperm tmp1 tmp1 tmp2, -- Mask out ASR
                                cspecialrw 0 28 tmp1, -- Clear ASR in trap vector
                               --  jalr_cap tmp1 0 ] -- CHERIoT lacks jalr_cap (jalr.cap) instr, replace with jalr
-                               jalr tmp1 0 0 ]      -- CHERIoT lacks jalr_cap (jalr.cap) instr, replace with jalr
+                               jalr tmp1 tmp1 0 ]      -- CHERIoT lacks jalr_cap (jalr.cap) instr, replace with jalr
 
 makeCap :: Integer -> Integer -> Integer -> Integer -> Integer -> Integer -> Template
 makeCap dst source tmp base len offset =
@@ -215,9 +216,19 @@ cspecialRWChain = random $ do
   tmpReg6 <- src
   return $ instSeq [ cspecialrw tmpReg2 30 tmpReg1
                   --  , jalr_cap      tmpReg2 0 -- CHERIoT lacks jalr_cap (jalr.cap) instr, replace with jalr
-                   , jalr       tmpReg2 0 0     -- CHERIoT lacks jalr_cap (jalr.cap) instr, replace with jalr
+                   , jalr       tmpReg2 tmpReg2 0     -- CHERIoT lacks jalr_cap (jalr.cap) instr, replace with jalr
                    , cspecialrw tmpReg4 30 tmpReg3
                    , cspecialrw tmpReg6 30 tmpReg5 ]
+incrMTCC :: Template
+incrMTCC = random $ do
+  ctmp <- suchThat src (/= 0)
+  immHi <- bits 4
+  let imm = immHi * 128  -- imm[11] = 0, imm[6:0] = 0
+  return $ instSeq [
+      cspecialrw ctmp 28 ctmp
+    , cincaddrimm ctmp ctmp imm
+    , cspecialrw 0 28 ctmp
+    ]
 
 tagCacheTest :: Template
 tagCacheTest = random $ do
