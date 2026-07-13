@@ -437,7 +437,7 @@ def find_reference_rvfi(ref_dir, test_name):
     )
 
 
-def check_results(ref_dir, results_dir, packet_slack):
+def check_results(ref_dir, results_dir, packet_slack, rvfi_max):
     rvfi_files = sorted(results_dir.glob("*.rvfi"))
     if not rvfi_files:
         raise RuntimeError("No *.rvfi files found in {}".format(results_dir))
@@ -450,7 +450,7 @@ def check_results(ref_dir, results_dir, packet_slack):
 
         sim_packet_count = count_rvfi_packets(sim_rvfi)
         ref_packet_count = count_rvfi_packets(ref_rvfi)
-        min_sim_packet_count = max(0, ref_packet_count - packet_slack)
+        min_sim_packet_count = min(rvfi_max - 10, ref_packet_count - packet_slack)
 
         #print("Comparing:")
         #print("  sim: {}".format(sim_rvfi))
@@ -543,7 +543,7 @@ def main():
         if args.skip_sim:
             ref_dir = verilator_dir / "sail_results"
             require_dir(results_dir, "existing simulation results directory")
-            check_results(ref_dir, results_dir, args.packet_slack)
+            check_results(ref_dir, results_dir, args.packet_slack, args.rvfi_max)
             return 0
 
         if not args.skip_sail:
@@ -556,7 +556,7 @@ def main():
 
         results_dir = run_simulations(root, dii_files, args.rvfi_max)
 
-        check_results(ref_dir, results_dir, args.packet_slack)
+        check_results(ref_dir, results_dir, args.packet_slack, args.rvfi_max)
         return 0
 
     except subprocess.CalledProcessError as e:
