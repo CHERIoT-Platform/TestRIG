@@ -225,7 +225,8 @@ def find_rvfi_conflict(rvfi_path, elf_ranges):
     """
     packets = list(iter_rvfi_packets(rvfi_path))
     pc_ranges = rvfi_pc_ranges_from_packets(packets)
-    protected_ranges = merge_ranges(list(elf_ranges) + list(pc_ranges))
+    # protected_ranges = merge_ranges(list(elf_ranges) + list(pc_ranges))
+    protected_ranges = pc_ranges
 
     # Debug only:
     # print("  ELF ranges:")

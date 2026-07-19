@@ -39,6 +39,8 @@ module QuickCheckVEngine.Templates.Utils.CHERI (
 , makeCap
 , makeCap_core
 , makeShortCap
+, legalCHERILoad
+, legalCHERIStore
 , legalCapLoad
 , legalCapStore
 -- , loadRegion -- Unused, so not fully updating for CHERIoT
@@ -51,6 +53,7 @@ module QuickCheckVEngine.Templates.Utils.CHERI (
 , genCHERImisc
 , genCHERIcontrol
 , loadTags
+, randomizeCapRegAddrs
 ) where
 
 import Test.QuickCheck
@@ -59,6 +62,7 @@ import RISCV
 import InstrCodec
 import QuickCheckVEngine.Template
 import QuickCheckVEngine.Templates.Utils.General
+import Test.QuickCheck (choose, elements, vectorOf)
 
 -- CHERIoT lacks cinvoke instr
 -- TODO rework to use alternative instructions to cinvoke
@@ -133,6 +137,85 @@ makeShortCap = random $ do
                      cincaddr dst dst tmp, -- TODO confirm that cincaddr is a suitable substitution for csetoffset for whatever this test is doing
                     --  cincoffsetimmediate dst dst (offset Data.Bits..&. 0xfff)] -- CHERIoT replaces cincoffsetimm(ediate) with cincaddrimm
                      cincaddrimm dst dst (offset Data.Bits..&. 0xfff)]            -- CHERIoT replaces cincoffsetimm(ediate) with cincaddrimm
+
+legalCHERILoad :: Integer -> Template
+legalCHERILoad baseOffset =
+  readParams $ \param -> random $ do
+    let arch = archDesc param
+
+    capReg <- suchThat src (/= 0)
+    rd     <- dest
+    count  <- choose (0, 3)
+
+    middle <- vectorOf count $ do
+      srcAddr <- src
+      srcData <- src
+      srcScr  <- elements [29, 30, 31]
+      imm     <- bits 12
+      mop     <- elements
+        [ 0x0, 0x1, 0x2, 0x3
+        , 0x4, 0x5, 0x6, 0x7
+        , 0x8, 0x9, 0xa, 0xb
+        , 0xc, 0xd, 0xe, 0xf
+        , 0x17, 0x1f
+        ]
+      dst <- dest
+
+      elements $
+        rv32_xcheri arch srcAddr srcData srcScr imm mop dst
+
+    offset <- choose (0x0, 0x7)
+
+    load <- elements
+      [ lb  rd capReg (baseOffset + offset)
+      , lbu rd capReg (baseOffset + offset)
+      , lh  rd capReg (baseOffset + offset)
+      , lhu rd capReg (baseOffset + offset)
+      , lw  rd capReg (baseOffset + offset)
+      , clc rd capReg ((baseOffset + offset) Data.Bits..&. 0x7fc)
+      ]
+
+    return $ instSeq $
+      [cspecialrw capReg 29 0] ++ middle ++ [load]
+
+
+legalCHERIStore :: Integer -> Template
+legalCHERIStore baseOffset =
+  readParams $ \param -> random $ do
+    let arch = archDesc param
+
+    capReg <- suchThat src (/= 0)
+    rs2    <- src
+    count  <- choose (0, 3)
+
+    middle <- vectorOf count $ do
+      srcAddr <- src
+      srcData <- src
+      srcScr  <- elements [29, 30, 31]
+      imm     <- bits 12
+      mop     <- elements
+        [ 0x0, 0x1, 0x2, 0x3
+        , 0x4, 0x5, 0x6, 0x7
+        , 0x8, 0x9, 0xa, 0xb
+        , 0xc, 0xd, 0xe, 0xf
+        , 0x17, 0x1f
+        ]
+      dst <- dest
+
+      elements $
+        rv32_xcheri arch srcAddr srcData srcScr imm mop dst
+
+    offset <- choose (0x0, 0x7)
+
+    store <- elements
+      [ sb capReg rs2 (baseOffset + offset)
+      , sh capReg rs2 (baseOffset + offset)
+      , sw capReg rs2 (baseOffset + offset)
+      , csc capReg rs2 ((baseOffset + offset) Data.Bits..&. 0x7fc)
+      ]
+
+    return $ instSeq $
+      [cspecialrw capReg 29 0] ++ middle ++ [store]
 
 legalCapLoad :: Integer -> Integer -> Template
 legalCapLoad addrReg targetReg = random $ do
@@ -300,3 +383,21 @@ genCHERIcontrol = random $ do
   return $ dist [ -- (2, instUniform $ rv32_xcheri_control srcAddr srcData dest) -- CHERIoT lacks cinvoke and jalr_cap (jalr.cap) instr
                   (1, inst (csetbounds dest srcData srcAddr))
                 , (2, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2) ] -- TODO add csr
+
+randomizeCapRegAddrs :: Template
+randomizeCapRegAddrs = random $ do
+  values <- vectorOf 14 (bits 32)
+
+  let makeSequence (reg, value) =
+        let upper20 =
+              ((value + 0x800) `shiftR` 12) Data.Bits..&. 0xfffff
+            lower12 =
+              value Data.Bits..&. 0xfff
+        in
+          [ lui      15 upper20
+          , addi     15 15 lower12
+          , csetaddr reg reg 15
+          ]
+
+  return $ instSeq $
+    concatMap makeSequence (zip [1..14] values)

@@ -86,8 +86,8 @@ capDecodeTest = random $ do
                     inst $ cgettag 5 2]
 
 
-genRandomCHERITest :: Template
-genRandomCHERITest = readParams $ \param -> random $ do
+genRandomCHERITest :: Integer -> Template
+genRandomCHERITest baseOffset = readParams $ \param -> random $ do
   let arch = archDesc param
   srcAddr   <- src
   srcData   <- src
@@ -106,17 +106,19 @@ genRandomCHERITest = readParams $ \param -> random $ do
                            (1, return (unsafe_csrs_indexFromName "mcause")) ]
   -- srcScr    <- elements $ [0, 1, 28, 29, 30, 31] ++ (if has_s arch then [12, 13, 14, 15] else []) ++ [2]
   -- srcScr    <- elements [28, 29, 30, 31] -- CHERIoT has limited cspecialrw targets
-  srcScr    <- elements [29, 30, 31] -- kliu: treat 28 (mtcc) separately in mtccIncr
+  srcScr    <- elements [30, 31] -- kliu: treat 28 (mtcc) separately in mtccIncr, 29 (mtdc)) reserved for mememory acceses
   -- let allowedCsrs = filter (csrFilter param) [ unsafe_csrs_indexFromName "sepc" -- CHERIoT lacks supervisor mode
   --                                            , unsafe_csrs_indexFromName "mepc" ] -- CHERIoT lacks mepc, uses mepcc instead
   let allowedCsrsRO = [ -- unsafe_csrs_indexFromName "scause" -- CHERIoT lacks supervisor mode
-                        unsafe_csrs_indexFromName "mcause" ]
+  --                      unsafe_csrs_indexFromName "mcause" ]
+                        unsafe_csrs_indexFromName "mstatus",
+                        unsafe_csrs_indexFromName "mie" ]
   -- srcCsr    <- if null allowedCsrs then return Nothing else Just <$> elements allowedCsrs -- CHERIoT has no allowedCsrs left
   srcCsrRO  <- elements allowedCsrsRO
-  return $ dist [ (5, legalLoad)
-                , (5, legalStore)
-                , (5, legalCapLoad srcAddr dest)
-                , (5, legalCapStore srcAddr)
+  return $ dist [ (20, legalCHERILoad baseOffset)
+                , (20, legalCHERIStore baseOffset)
+                -- , (10, legalCapLoad srcAddr dest)
+                -- , (10, legalCapStore srcAddr)
                 , (10, incrMTCC)
                 , (10, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2)
                 , (10, instUniform $ rv32_xcheri arch srcAddr srcData srcScr imm mop dest)
@@ -136,8 +138,9 @@ genRandomCHERITest = readParams $ \param -> random $ do
 randomCHERIRVCTest :: Template
 randomCHERIRVCTest = random $ do
   rvcInst <- bits 16
+  baseOffset <- (* 4) <$> choose (0, 255)
   return $ mconcat [ -- switchEncodingMode -- Only pure CHERI mode in CHERIoT
-                     genRandomCHERITest
+                     genRandomCHERITest baseOffset
                    , uniform [inst $ MkInstruction rvcInst, gen_rv_c]
                    , repeatN 5 genCHERIinspection
                    ]
@@ -168,4 +171,11 @@ randomCHERIRVCTest = random $ do
 --                 ]
 
 randomCHERITest :: Template
-randomCHERITest = fp_prologue $ repeatTillEnd genRandomCHERITest
+randomCHERITest =
+  fp_prologue $ random $ do
+    -- Persistent 10-bit, four-byte-aligned value: 0x000â0x3fc.
+    baseOffset <- (* 4) <$> choose (0, 255)
+    return $ mconcat
+      [ randomizeCapRegAddrs
+      , repeatTillEnd $ genRandomCHERITest baseOffset
+      ]
