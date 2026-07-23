@@ -117,21 +117,16 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
   srcCsrRO  <- elements allowedCsrsRO
   return $ dist [ (20, legalCHERILoad baseOffset)
                 , (20, legalCHERIStore baseOffset)
-                -- , (10, legalCapLoad srcAddr dest)
-                -- , (10, legalCapStore srcAddr)
-                , (10, incrMTCC)
+                -- , (15, incrMTCC)
                 , (10, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2)
                 , (10, instUniform $ rv32_xcheri arch srcAddr srcData srcScr imm mop dest)
                 , (10, inst $ cspecialrw dest srcScr srcAddr)
-                -- , (5, maybe mempty (\idx -> instUniform $ rv32_zicsr srcData dest idx mop) srcCsr) -- CHERIoT has no allowedCsrs left
                 , (5, csrr dest srcCsrRO)
-                -- , (10, switchEncodingMode) -- Only pure CHERI mode in CHERIoT
                 , (5, cspecialRWChain)
-                -- , (10, randomCInvoke srcAddr srcData tmpReg tmpReg2) -- CHERIoT lacks cinvoke instr
                 , (10, makeShortCap)
                 -- , (5, clearASR tmpReg tmpReg2)
                 , (5, boundPCC tmpReg tmpReg2 imm longImm)
-                , (20, inst $ cgettag dest dest)
+                , (5, inst $ cgettag dest dest)
                 , (if has_nocloadtags arch then 0 else 10, loadTags srcAddr srcData)
                 ]
 

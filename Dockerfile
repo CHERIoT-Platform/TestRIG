@@ -57,7 +57,11 @@ RUN bash -lc '\
     rm -f c_emulator/cheri_riscv_rvfi_RV32 c_emulator/*.o && \
     make ARCH=RV32 ELFIO_DIR=/opt/elfio rvfi && \
     test -x c_emulator/cheri_riscv_rvfi_RV32 && \
-    c_emulator/cheri_riscv_rvfi_RV32 --help >/dev/null'
+    c_emulator/cheri_riscv_rvfi_RV32 --help >/dev/null && \
+    cd /src/cheriot-sail/sail-riscv && \
+    rm -f c_emulator/riscv_rvfi_RV32 c_emulator/*.o && \
+    make ARCH=RV32 ELFIO_DIR=/opt/elfio rvfi && \
+    test -x c_emulator/riscv_rvfi_RV32'
 
 # ---------------------------------------------------------------------------
 # Stage 2 — build QCVEngine (Haskell instruction generator)
@@ -87,6 +91,16 @@ COPY vengines/QuickCheckVEngine /src/QCVEngine
 # pre-built binary that predates our --output-dir patch.
 RUN cd /src/QCVEngine \
  && rm -rf dist-newstyle dist .stack-work bin \
+ && mkdir -p /root/.cabal \
+ && printf '%s\n' \
+      'repository hackage.haskell.org' \
+      '  url: http://hackage.haskell.org/' \
+      '  secure: False' \
+      'remote-repo-cache: /root/.cabal/packages' \
+      'world-file: /root/.cabal/world' \
+      > /root/.cabal/config \
+ && echo '----- Cabal repository configuration -----' \
+ && cat /root/.cabal/config \
  && cabal update \
  && cabal v2-build --ghc-options=-O exe:QCVEngine \
  && mkdir -p /out \
@@ -115,14 +129,23 @@ COPY . /testrig/
 # COPY above carried in).
 COPY --from=sail-builder /src/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 \
      /testrig/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32
+COPY --from=sail-builder /src/cheriot-sail/sail-riscv/c_emulator/riscv_rvfi_RV32 \
+     /testrig/riscv-implementations/cheriot-sail/sail-riscv/c_emulator/riscv_rvfi_RV32
 
 # Drop in the QCVEngine generator binary (replaces Python generator in
 # run_two_phase.sh). Exposed on PATH as 'qcvengine-gen' for convenience.
 COPY --from=hs-builder /out/QCVEngine /usr/local/bin/qcvengine-gen
 
 RUN chmod +x /testrig/run_two_phase.sh /testrig/utils/scripts/*.py \
+ && test -x /testrig/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 \
+ && test -x /testrig/riscv-implementations/cheriot-sail/sail-riscv/c_emulator/riscv_rvfi_RV32 \
  && /testrig/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 --help >/dev/null \
+ && /testrig/riscv-implementations/cheriot-sail/sail-riscv/c_emulator/riscv_rvfi_RV32 --help >/dev/null \
  && test -x /usr/local/bin/qcvengine-gen
+
+#RUN chmod +x /testrig/run_two_phase.sh /testrig/utils/scripts/*.py \
+# && /testrig/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32 --help >/dev/null \
+# && test -x /usr/local/bin/qcvengine-gen
 
 ENV TESTRIG_ROOT=/testrig
 

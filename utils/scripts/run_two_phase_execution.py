@@ -30,7 +30,7 @@ def parse_args():
                         'traces from the ELF re-exec path')
     p.add_argument('--sail-path', required=True,
                    help='path to cheri_riscv_rvfi_RV32 binary')
-    p.add_argument('--inst-limit', type=int, default=500,
+    p.add_argument('--inst-limit', type=int, default=1000,
                    help='instruction execution limit (default: 500')
     p.add_argument('--skip-ibex', action='store_true',
                    help='kept for backwards compat; this runner is Sail-only')

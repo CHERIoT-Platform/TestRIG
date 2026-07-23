@@ -146,6 +146,7 @@ legalCHERILoad baseOffset =
     capReg <- suchThat src (/= 0)
     rd     <- dest
     count  <- choose (0, 3)
+    --count <- pure 0
 
     middle <- vectorOf count $ do
       srcAddr <- src
@@ -187,6 +188,7 @@ legalCHERIStore baseOffset =
     capReg <- suchThat src (/= 0)
     rs2    <- src
     count  <- choose (0, 3)
+    -- count <- pure 0
 
     middle <- vectorOf count $ do
       srcAddr <- src
@@ -305,8 +307,8 @@ cspecialRWChain = random $ do
 incrMTCC :: Template
 incrMTCC = random $ do
   ctmp <- suchThat src (/= 0)
-  immHi <- bits 4
-  let imm = immHi * 128  -- imm[11] = 0, imm[6:0] = 0
+  -- immHi <- bits 4
+  let imm = 2 * 128  -- imm[11] = 0, imm[6:0] = 0
   return $ instSeq [
       cspecialrw ctmp 28 ctmp
     , cincaddrimm ctmp ctmp imm
@@ -388,16 +390,46 @@ randomizeCapRegAddrs :: Template
 randomizeCapRegAddrs = random $ do
   values <- vectorOf 14 (bits 32)
 
-  let makeSequence (reg, value) =
+  let loadRandom value =
         let upper20 =
               ((value + 0x800) `shiftR` 12) Data.Bits..&. 0xfffff
             lower12 =
               value Data.Bits..&. 0xfff
         in
-          [ lui      15 upper20
-          , addi     15 15 lower12
-          , csetaddr reg reg 15
+          [ lui  15 upper20
+          , addi 15 15 lower12
           ]
 
+      x1Value = (head values) Data.Bits..&. 0x00ffff00
+
+      -- x1: read MTDC, randomize address, then write it back to MTDC.
+      x1Sequence =
+        [ cspecialrw 1 29 0
+        ]
+        ++ loadRandom x1Value
+        ++
+        [ csetaddr   1 1 15
+        , cspecialrw 0 29 1
+        ]
+
+      -- x2âx14:
+      -- odd registers derive from MTCC; even registers derive from MTDC.
+      makeSequence (reg, value) =
+        let scr =
+              if odd reg
+                then 28  -- MTCC
+                else 29  -- MTDC
+        in
+          [ cspecialrw reg scr 0
+          ]
+          ++ loadRandom value
+          ++
+          [ csetaddr reg reg 15
+          ]
+
+      remainingSequences =
+        concatMap makeSequence $
+          zip [2..14] (tail values)
+
   return $ instSeq $
-    concatMap makeSequence (zip [1..14] values)
+    x1Sequence ++ remainingSequences

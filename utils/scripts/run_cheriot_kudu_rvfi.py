@@ -17,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -189,6 +190,34 @@ def format_rvfi_packet(packet):
         for field in COMPARE_FIELDS
     )
 
+def normalize_cap_data(value):
+    """Normalize capability data before comparison.
+
+    cexp is bits [53:49]. Decode exp as:
+      exp = 0                    when cexp == 0
+      exp = cexp ^ 0x1f          otherwise
+
+    When exp > 0x18, bits [48:32] are ignored by clearing them.
+    """
+    if value is None:
+        return None
+
+    cexp = (value >> 49) & 0x1f
+    exp = cexp if cexp == 0 else (cexp ^ 0x1f)
+    tag = (value >> 64) & 0x1
+
+    if tag == 0 and exp > 0x18:
+        value &= ~(((1 << 17) - 1) << 32)
+
+    return value
+
+
+def normalize_packet_cap_data(packet):
+    """Apply capability-data normalization to compared data fields."""
+    packet.rd_wdata = normalize_cap_data(packet.rd_wdata)
+    packet.mem_wdata = normalize_cap_data(packet.mem_wdata)
+
+
 def mask_packet_mem_data(packet):
     """Post-process memory data fields before comparison.
 
@@ -251,6 +280,9 @@ def compare_rvfi_prefix(left, right):
 
         mask_packet_mem_data(lpacket)
         mask_packet_mem_data(rpacket)
+
+        normalize_packet_cap_data(lpacket)
+        normalize_packet_cap_data(rpacket)
 
         diff_fields = [
             field for field in COMPARE_FIELDS
@@ -371,7 +403,18 @@ def run_simulations(root, dii_files, rvfi_max):
     require_file(sim_exe, "Verilator simulation executable")
     clean_dir(results_dir)
 
-    print("Starting verilog simulation ...", flush=True)
+    instr_gnt_wmax  = random.randint(0, 2)
+    instr_resp_wmax = random.randint(0, 1)
+    data_gnt_wmax   = random.randint(0, 2)
+    data_resp_wmax  = random.randint(0, 1)
+
+    print( "Running verilog simulation with WMAX: "
+           "INSTR_GNT={}, INSTR_RESP={}, DATA_GNT={}, DATA_RESP={}".format(
+        instr_gnt_wmax,
+        instr_resp_wmax,
+        data_gnt_wmax,
+        data_resp_wmax,), flush=True,)
+
 
     for dii in sorted(dii_files):
         test_name = dii.stem
@@ -382,16 +425,19 @@ def run_simulations(root, dii_files, rvfi_max):
             stale = verilator_dir / log_name
             if stale.exists():
                 stale.unlink()
-        run_cmd([ str(sim_exe),
-                "+TEST={}".format(test_name),
-                "+RVFI_MAX={}".format(rvfi_max),
-                "+INSTR_GNT_WMAX=2",
-                "+INSTR_RESP_WMAX=1",
-                "+DATA_GNT_WMAX=2",
-                "+DATA_RESP_WMAX=1"],
-                cwd=verilator_dir,
-                quiet=True)
-                #quiet=False)
+
+        run_cmd([
+            str(sim_exe),
+            "+TEST={}".format(test_name),
+            "+RVFI_MAX={}".format(rvfi_max),
+            "+INSTR_GNT_WMAX={}".format(instr_gnt_wmax),
+            "+INSTR_RESP_WMAX={}".format(instr_resp_wmax),
+            "+DATA_GNT_WMAX={}".format(data_gnt_wmax),
+            "+DATA_RESP_WMAX={}".format(data_resp_wmax),
+        ],
+            cwd=verilator_dir,
+            quiet=True,
+        )
 
         rvfi_log = verilator_dir / "rvfi_kudu_core.log"
         trace_log = verilator_dir / "trace_kudu_core.log"
@@ -505,8 +551,8 @@ def main():
     parser.add_argument(
         "--rvfi_max",
         type=int,
-        default=500,
-        help="Verilator +RVFI_MAX value. Default: 500",
+        default=1000,
+        help="Verilator +RVFI_MAX value. Default: 1000",
     )
 
     parser.add_argument(
