@@ -1,13 +1,6 @@
 [submodule "BSV-RVFI-DII"]
         path = utils/BSV-RVFI-DII
         url = https://github.com/CTSRD-CHERI/BSV-RVFI-DII.git
-[submodule "sail-riscv"]
-	path = riscv-implementations/sail-riscv
-	url = https://github.com/rems-project/sail-riscv.git
-	branch = hpm_events
-[submodule "sail-cheri-riscv"]
-	path = riscv-implementations/sail-cheri-riscv
-	url = https://github.com/CTSRD-CHERI/sail-cheri-riscv.git
 [submodule "riscv-implementations/cheriot-sail"]
 	path = riscv-implementations/cheriot-sail
 	url = https://github.com/CHERIoT-Platform/cheriot-sail.git

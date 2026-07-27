@@ -106,7 +106,8 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
                            (1, return (unsafe_csrs_indexFromName "mcause")) ]
   -- srcScr    <- elements $ [0, 1, 28, 29, 30, 31] ++ (if has_s arch then [12, 13, 14, 15] else []) ++ [2]
   -- srcScr    <- elements [28, 29, 30, 31] -- CHERIoT has limited cspecialrw targets
-  srcScr    <- elements [30, 31] -- kliu: treat 28 (mtcc) separately in mtccIncr, 29 (mtdc)) reserved for mememory acceses
+  srcScr    <- elements [30]
+  -- kliu: 29 (mtdc)) reserved for mememory acceses, 28 (mtcc) and 31 (mepcc) reserved for trap handling/resume
   -- let allowedCsrs = filter (csrFilter param) [ unsafe_csrs_indexFromName "sepc" -- CHERIoT lacks supervisor mode
   --                                            , unsafe_csrs_indexFromName "mepc" ] -- CHERIoT lacks mepc, uses mepcc instead
   let allowedCsrsRO = [ -- unsafe_csrs_indexFromName "scause" -- CHERIoT lacks supervisor mode
@@ -120,6 +121,7 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
                 -- , (15, incrMTCC)
                 , (10, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2)
                 , (10, instUniform $ rv32_xcheri arch srcAddr srcData srcScr imm mop dest)
+                , (10, gen_rv_c)
                 , (10, inst $ cspecialrw dest srcScr srcAddr)
                 , (5, csrr dest srcCsrRO)
                 , (5, cspecialRWChain)
