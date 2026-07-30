@@ -8,6 +8,9 @@ Expected to be run from the TestRIG repository root, or use --root.
 Modes:
   quick  -> docker compose up testrig-quicktest
   full   -> docker compose up testrig-fulltest
+
+Use --count to override the number of generated tests, for example:
+  run_cheriot_kudu_rvfi.py full --count 500
 """
 
 import argparse
@@ -353,13 +356,29 @@ def require_dir(path, description):
 
 # ---- workflow steps ----
 
-def run_testrig(root, mode):
+def run_testrig(root, mode, count=None):
     service = {
         "quick": "testrig-quicktest",
         "full": "testrig-fulltest",
     }[mode]
 
-    run_cmd(["docker", "compose", "up", service], cwd=root)
+    if count is None:
+        run_cmd(["docker", "compose", "up", service], cwd=root)
+        return
+
+    run_cmd(
+        [
+            "docker",
+            "compose",
+            "run",
+            "--rm",
+            service,
+            "bash",
+            "-lc",
+            "./run_two_phase.sh --count {} --template caprandom --clean".format(count),
+        ],
+        cwd=root,
+    )
 
 
 def prepare_sim_bin(root):
@@ -563,6 +582,13 @@ def main():
     )
 
     parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="Override the number of TestRIG tests, for example: --count 500",
+    )
+
+    parser.add_argument(
         "--skip-sail",
         action="store_true",
         help="Skip Sail/TestRIG docker run and reuse existing two_phase_output/results",
@@ -575,6 +601,9 @@ def main():
     )
 
     args = parser.parse_args()
+
+    if args.count is not None and args.count <= 0:
+        parser.error("--count must be greater than zero")
 
     if not args.skip_sail and not args.skip_sim and args.mode is None:
         parser.error("mode is required unless --skip-sail or --skip-sim is specified")
@@ -593,7 +622,7 @@ def main():
             return 0
 
         if not args.skip_sail:
-            run_testrig(root, args.mode)
+            run_testrig(root, args.mode, args.count)
 
         # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)
