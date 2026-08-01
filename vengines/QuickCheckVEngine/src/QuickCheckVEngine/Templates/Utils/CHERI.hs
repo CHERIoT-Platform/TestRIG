@@ -39,15 +39,11 @@ module QuickCheckVEngine.Templates.Utils.CHERI (
 , makeCap
 , makeCap_core
 , makeShortCap
-, legalCHERILoad
-, legalCHERIStore
-, legalCapLoad
-, legalCapStore
+, legalCHERILoadStore
 -- , loadRegion -- Unused, so not fully updating for CHERIoT
 -- , switchEncodingMode
 , cspecialRWChain
 , incrMTCC
-, tagCacheTest
 , genCHERIinspection
 , genCHERIarithmetic
 , genCHERImisc
@@ -138,107 +134,51 @@ makeShortCap = random $ do
                     --  cincoffsetimmediate dst dst (offset Data.Bits..&. 0xfff)] -- CHERIoT replaces cincoffsetimm(ediate) with cincaddrimm
                      cincaddrimm dst dst (offset Data.Bits..&. 0xfff)]            -- CHERIoT replaces cincoffsetimm(ediate) with cincaddrimm
 
-legalCHERILoad :: Integer -> Template
-legalCHERILoad baseOffset =
+legalCHERILoadStore :: Integer -> Template
+legalCHERILoadStore baseOffset =
   readParams $ \param -> random $ do
     let arch = archDesc param
 
     capReg <- suchThat src (/= 0)
-    rd     <- dest
     count  <- choose (0, 3)
-    --count <- pure 0
 
     middle <- vectorOf count $ do
       srcAddr <- src
       srcData <- src
-      srcScr  <- elements [29, 30, 31]
+      srcScr  <- elements [30]
       imm     <- bits 12
-      mop     <- elements
-        [ 0x0, 0x1, 0x2, 0x3
-        , 0x4, 0x5, 0x6, 0x7
-        , 0x8, 0x9, 0xa, 0xb
-        , 0xc, 0xd, 0xe, 0xf
-        , 0x17, 0x1f
-        ]
+      longImm <- bits 20
       dst <- dest
+      -- "middle" part of the sequence, exclude jump/branches for now
+      elements
+        (  rv32_i_arith srcAddr srcData dst imm longImm
+        ++ rv32_xcheri_inspection srcAddr dst
+        ++ rv32_xcheri_arithmetic srcAddr srcData imm dst
+        ++ rv32_xcheri_misc srcAddr srcData srcScr imm dst
+        )
 
-      elements $
-        rv32_xcheri arch srcAddr srcData srcScr imm mop dst
+    memOpCount <- choose (1, 2)
+    memOps <- vectorOf memOpCount $ do
+      offset <- choose (0x0, 0x7)
+      rd     <- dest
+      rs2    <- src
 
-    offset <- choose (0x0, 0x7)
-
-    load <- elements
-      [ lb  rd capReg (baseOffset + offset)
-      , lbu rd capReg (baseOffset + offset)
-      , lh  rd capReg (baseOffset + offset)
-      , lhu rd capReg (baseOffset + offset)
-      , lw  rd capReg (baseOffset + offset)
-      , clc rd capReg ((baseOffset + offset) Data.Bits..&. 0x7fc)
-      ]
+      elements
+        [ lb  rd capReg (baseOffset + offset)
+        , lbu rd capReg (baseOffset + offset)
+        , lh  rd capReg (baseOffset + offset)
+        , lhu rd capReg (baseOffset + offset)
+        , lw  rd capReg (baseOffset + offset)
+        , clc rd capReg ((baseOffset + offset) Data.Bits..&. 0x7fc)
+        , sb  capReg rs2 (baseOffset + offset)
+        , sh  capReg rs2 (baseOffset + offset)
+        , sw  capReg rs2 (baseOffset + offset)
+        , csc rs2 capReg((baseOffset + offset) Data.Bits..&. 0x7fc)
+        ]
 
     return $ instSeq $
-      [cspecialrw capReg 29 0] ++ middle ++ [load]
+      [cspecialrw capReg 29 0] ++ middle ++ memOps
 
-
-legalCHERIStore :: Integer -> Template
-legalCHERIStore baseOffset =
-  readParams $ \param -> random $ do
-    let arch = archDesc param
-
-    capReg <- suchThat src (/= 0)
-    rs2    <- src
-    count  <- choose (0, 3)
-    -- count <- pure 0
-
-    middle <- vectorOf count $ do
-      srcAddr <- src
-      srcData <- src
-      srcScr  <- elements [29, 30, 31]
-      imm     <- bits 12
-      mop     <- elements
-        [ 0x0, 0x1, 0x2, 0x3
-        , 0x4, 0x5, 0x6, 0x7
-        , 0x8, 0x9, 0xa, 0xb
-        , 0xc, 0xd, 0xe, 0xf
-        , 0x17, 0x1f
-        ]
-      dst <- dest
-
-      elements $
-        rv32_xcheri arch srcAddr srcData srcScr imm mop dst
-
-    offset <- choose (0x0, 0x7)
-
-    store <- elements
-      [ sb capReg rs2 (baseOffset + offset)
-      , sh capReg rs2 (baseOffset + offset)
-      , sw capReg rs2 (baseOffset + offset)
-      , csc capReg rs2 ((baseOffset + offset) Data.Bits..&. 0x7fc)
-      ]
-
-    return $ instSeq $
-      [cspecialrw capReg 29 0] ++ middle ++ [store]
-
-legalCapLoad :: Integer -> Integer -> Template
-legalCapLoad addrReg targetReg = random $ do
-  tmpReg <- src
-  return $ instSeq [ andi addrReg addrReg 0xff
-                   , lui tmpReg 0x40004
-                   , slli tmpReg tmpReg 1
-                   , add addrReg tmpReg addrReg
-                  --  , cload targetReg addrReg 0x17 -- CHERIoT lacks mem loads w/explicit addr, replace lc.ddc (0x17) with clc
-                   , clc targetReg addrReg 0]        -- CHERIoT lacks mem loads w/explicit addr, replace lc.ddc (0x17) with clc
-
-legalCapStore :: Integer -> Template
-legalCapStore addrReg = random $ do
-  tmpReg  <- src
-  dataReg <- dest
-  return $ instSeq [ andi addrReg addrReg 0xff
-                   , lui tmpReg 0x40004
-                   , slli tmpReg tmpReg 1
-                   , add addrReg tmpReg addrReg
-                  --  , cstore dataReg addrReg 0x4 -- CHERIoT lacks mem stores w/explicit addr, replace sc.ddc (0x04) with csc
-                   , csc dataReg addrReg 0]        -- CHERIoT lacks mem stores w/explicit addr, replace sc.ddc (0x04) with csc
 
 loadTags :: Integer -> Integer -> Template
 loadTags addrReg capReg = random $ do
@@ -315,13 +255,6 @@ incrMTCC = random $ do
     , cspecialrw 0 28 ctmp
     ]
 
-tagCacheTest :: Template
-tagCacheTest = random $ do
-  addrReg   <- src
-  targetReg <- dest
-  return $     legalCapStore addrReg
-            <> legalCapLoad addrReg targetReg
-            <> inst (cgettag targetReg targetReg)
 
 genCHERIinspection :: Template
 genCHERIinspection = random $ do

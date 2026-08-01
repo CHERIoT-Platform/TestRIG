@@ -116,8 +116,7 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
                         unsafe_csrs_indexFromName "mie" ]
   -- srcCsr    <- if null allowedCsrs then return Nothing else Just <$> elements allowedCsrs -- CHERIoT has no allowedCsrs left
   srcCsrRO  <- elements allowedCsrsRO
-  return $ dist [ (20, legalCHERILoad baseOffset)
-                , (20, legalCHERIStore baseOffset)
+  return $ dist [ (20, legalCHERILoadStore baseOffset)
                 -- , (15, incrMTCC)
                 , (20, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2)
                 , (10, instUniform $ rv32_xcheri arch srcAddr srcData srcScr imm mop dest)
@@ -132,6 +131,49 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
                 , (5, inst $ cgettag dest dest)
                 , (if has_nocloadtags arch then 0 else 10, loadTags srcAddr srcData)
                 ]
+
+genRandomCHERITestNoJump :: Integer -> Template
+genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
+    let arch = archDesc param
+
+    srcAddr <- src
+    srcData <- src
+    tmpReg  <- src
+    tmpReg2 <- src
+    dest    <- dest
+    imm     <- bits 12
+    longImm <- bits 20
+    fenceOp1 <- bits 4
+    fenceOp2 <- bits 4
+
+    srcScr <- elements [30]
+
+    let allowedCsrsRO =
+          [ unsafe_csrs_indexFromName "mstatus"
+          , unsafe_csrs_indexFromName "mie"
+          ]
+
+    srcCsrRO <- elements allowedCsrsRO
+
+    let rv32iNoControl =
+             rv32_i_arith srcAddr srcData dest imm longImm
+          ++ [auipc dest longImm]
+
+    return $ dist
+      [ (30, legalCHERILoadStore baseOffset)
+      , (20, instUniform rv32iNoControl)
+      , (10, instUniform $
+              rv32_xcheri_inspection srcAddr dest
+           ++ rv32_xcheri_arithmetic srcAddr srcData imm dest
+           ++ rv32_xcheri_misc srcAddr srcData srcScr imm dest)
+      , (20, instUniform $ rv32_m srcAddr srcData dest)
+      , (10, inst $ cspecialrw dest srcScr srcAddr)
+      , (5,  csrr dest srcCsrRO)
+      , (10, makeShortCap)
+      , (5,  inst $ cgettag dest dest)
+      , (if has_nocloadtags arch then 0 else 10,
+           loadTags srcAddr srcData)
+      ]
 
 randomCHERIRVCTest :: Template
 randomCHERIRVCTest = random $ do
@@ -175,5 +217,6 @@ randomCHERITest =
     baseOffset <- (* 4) <$> choose (0, 255)
     return $ mconcat
       [ randomizeCapRegAddrs
+      , repeatN 150 $ genRandomCHERITestNoJump baseOffset
       , repeatTillEnd $ genRandomCHERITest baseOffset
       ]
