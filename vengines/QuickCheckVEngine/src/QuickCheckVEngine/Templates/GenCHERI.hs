@@ -116,9 +116,18 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
                         unsafe_csrs_indexFromName "mie" ]
   -- srcCsr    <- if null allowedCsrs then return Nothing else Just <$> elements allowedCsrs -- CHERIoT has no allowedCsrs left
   srcCsrRO  <- elements allowedCsrsRO
+
+  -- mret causes test to stuck-in-loo
+  let rv32iWithoutMret =
+        concat
+          [ rv32_i_arith srcAddr srcData dest imm longImm
+          , rv32_i_mem srcAddr srcData dest imm fenceOp1 fenceOp2
+          , rv32_i_ctrl srcAddr srcData dest imm longImm
+          ]
+
   return $ dist [ (20, legalCHERILoadStore baseOffset)
                 -- , (15, incrMTCC)
-                , (20, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2)
+                , (20, instUniform $ rv32iWithoutMret)
                 , (10, instUniform $ rv32_xcheri arch srcAddr srcData srcScr imm mop dest)
                 , (10, gen_rv_c)
                 , (20, instUniform $ rv32_m srcAddr srcData dest)

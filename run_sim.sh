@@ -52,7 +52,7 @@ for ((i = 1; i <= N; i++)); do
   echo "===== run $i / $N ====="
 
   tmp_log="$(mktemp)"
-  python3 run_cheriot_kudu_rvfi.py full 2>&1 | tee "$tmp_log"
+  python3 utils/scripts/run_cheriot_kudu_rvfi.py full 2>&1 | tee "$tmp_log"
   rc=${PIPESTATUS[0]}
 
   # Count Verilog simulation cases from the wrapper output.

@@ -163,17 +163,25 @@ legalCHERILoadStore baseOffset =
       rd     <- dest
       rs2    <- src
 
+      clcMask <- frequency
+        [ (9, return 0x7f8)  -- 8-byte aligned
+        , (1, return 0x7fc)  -- 4-byte aligned
+        ]
+
+      let normalOffset = baseOffset + offset
+          clcOffset    = normalOffset Data.Bits..&. clcMask
+
       elements
-        [ lb  rd capReg (baseOffset + offset)
-        , lbu rd capReg (baseOffset + offset)
-        , lh  rd capReg (baseOffset + offset)
-        , lhu rd capReg (baseOffset + offset)
-        , lw  rd capReg (baseOffset + offset)
-        , clc rd capReg ((baseOffset + offset) Data.Bits..&. 0x7fc)
-        , sb  capReg rs2 (baseOffset + offset)
-        , sh  capReg rs2 (baseOffset + offset)
-        , sw  capReg rs2 (baseOffset + offset)
-        , csc rs2 capReg((baseOffset + offset) Data.Bits..&. 0x7fc)
+        [ lb  rd capReg normalOffset
+        , lbu rd capReg normalOffset
+        , lh  rd capReg normalOffset
+        , lhu rd capReg normalOffset
+        , lw  rd capReg normalOffset
+        , clc rd capReg clcOffset
+        , sb  capReg rs2 normalOffset
+        , sh  capReg rs2 normalOffset
+        , sw  capReg rs2 normalOffset
+        , csc rs2 capReg clcOffset
         ]
 
     return $ instSeq $
