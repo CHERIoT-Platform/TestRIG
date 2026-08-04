@@ -356,15 +356,18 @@ def require_dir(path, description):
 
 # ---- workflow steps ----
 
-def run_testrig(root, mode, count=None):
-    service = {
-        "quick": "testrig-quicktest",
-        "full": "testrig-fulltest",
-    }[mode]
-
+def run_testrig(root, size_mode, sail_mode, count=None):
     if count is None:
-        run_cmd(["docker", "compose", "up", service], cwd=root)
-        return
+        count = 10 if size_mode == "quick" else 100
+
+    sail_model = "rv32" if sail_mode == "rv32" else "cheriot"
+
+    command = (
+        "./run_two_phase.sh "
+        "--count {} "
+        "--sail-model {} "
+        "--clean"
+    ).format(count, sail_model)
 
     run_cmd(
         [
@@ -372,14 +375,13 @@ def run_testrig(root, mode, count=None):
             "compose",
             "run",
             "--rm",
-            service,
+            "testrig",
             "bash",
             "-lc",
-            "./run_two_phase.sh --count {} --template caprandom --clean".format(count),
+            command,
         ],
         cwd=root,
     )
-
 
 def prepare_sim_bin(root):
     src = root / "two_phase_output" / "elfs"
@@ -600,6 +602,13 @@ def main():
         help="Skip running simulations and only compare existing results",
     )
 
+    parser.add_argument(
+        "--sail-mode",
+        choices=["cheriot", "rv32"],
+        default="cheriot",
+        help="Select CHERIoT Sail or standard RV32 sail-riscv",
+    )
+
     args = parser.parse_args()
 
     if args.count is not None and args.count <= 0:
@@ -622,8 +631,7 @@ def main():
             return 0
 
         if not args.skip_sail:
-            run_testrig(root, args.mode, args.count)
-
+            run_testrig(root, args.mode, args.sail_mode, args.count)
         # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)
         ref_dir = root / "two_phase_output" / "results"

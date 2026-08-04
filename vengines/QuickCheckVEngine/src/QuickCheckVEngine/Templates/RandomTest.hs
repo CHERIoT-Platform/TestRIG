@@ -40,24 +40,57 @@ import Test.QuickCheck
 import RISCV
 import QuickCheckVEngine.Template
 import QuickCheckVEngine.Templates.Utils
+import QuickCheckVEngine.Templates.GenCompressed (gen_rv_c)
+
+-- | Initialize all nonzero RV32E registers with random 32-bit values.
+randomizeIntRegs :: Template
+randomizeIntRegs =
+  mconcat [prepReg32 reg | reg <- [1..15]]
 
 -- | 'randomTest' provides a 'Template' for a random test
 randomTest :: Template
-randomTest = fp_prologue go
-  where go = random $ do
-          remaining <- getSize
-          srcAddr   <- src
-          srcData   <- src
-          dest      <- dest
-          imm       <- (bits 12)
-          longImm   <- (bits 20)
-          fenceOp1  <- (bits 4)
-          fenceOp2  <- (bits 4)
-          csrAddr   <- frequency [ -- (1, return (unsafe_csrs_indexFromName "mccsr")) -- CHERIoT lacks capability CSRs
-                                   (1, return (unsafe_csrs_indexFromName "mcause"))
-                                 , (1, bits 12) ]
-          let test = dist [ (if remaining > 10 then 1 else 0, legalLoad)
-                          , (if remaining > 10 then 1 else 0, legalStore)
-                          , (10, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2) --TODO re-add csrs
-                          , (if remaining > 10 then 1 else 0, surroundWithMemAccess go) ]
-          return $ if remaining <= 0 then mempty else if remaining > 10 then test <> go else test
+randomTest = readParams $ \params ->
+  fp_prologue $ randomizeIntRegs <> go (archDesc params)
+  where
+    go desc = random $ do
+      remaining <- getSize
+      srcAddr   <- src
+      srcData   <- src
+      dest      <- dest
+      imm       <- bits 12
+      longImm   <- bits 20
+      fenceOp1  <- bits 4
+      fenceOp2  <- bits 4
+      csrAddr   <- frequency [ -- (1, return (unsafe_csrs_indexFromName "mccsr")) -- CHERIoT lacks capability CSRs
+                               (1, return (unsafe_csrs_indexFromName "mcause"))
+                             , (1, bits 12) ]
+      let baseTests =
+            [ (if remaining > 10 then 1 else 0, legalLoad)
+            , (if remaining > 10 then 1 else 0, legalStore)
+            , (10, instUniform $ rv32_i srcAddr srcData dest imm longImm fenceOp1 fenceOp2)
+            ]
+
+          mTests =
+            if has_m desc
+              then [(10, instUniform $ rv32_m srcAddr srcData dest)]
+              else []
+
+          cTests =
+            if has_c desc
+              then [(10, gen_rv_c)]
+              else []
+
+          recursiveTests =
+            [ (if remaining > 10 then 1 else 0,
+               surroundWithMemAccess (go desc))
+            ]
+
+          test = dist (baseTests ++ mTests ++ cTests ++ recursiveTests)
+
+      return $
+        if remaining <= 0
+          then mempty
+          else
+            if remaining > 10
+              then test <> go desc
+              else test

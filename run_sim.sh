@@ -2,7 +2,42 @@
 
 set -u
 
-N="${1:-1000}"
+usage() {
+  echo "Usage: $0 [-rv32] [N]"
+  echo "  -rv32  Build and run in RV32 mode"
+  echo "  N      Number of wrapper runs (default: 1000)"
+}
+
+N=1000
+N_SET=0
+RV32=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -rv32)
+      RV32=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "ERROR: unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [ "$N_SET" -eq 1 ]; then
+        echo "ERROR: only one run count may be specified" >&2
+        usage >&2
+        exit 2
+      fi
+      N="$1"
+      N_SET=1
+      ;;
+  esac
+  shift
+done
 
 TOTAL_RUNS=0
 STARTED_RUNS=0
@@ -45,6 +80,30 @@ fi
 
 TOTAL_RUNS="${N}"
 
+echo "===== building Verilator model ====="
+(
+  cd riscv-implementations/cheriot-kudu/sim/verilator || exit 1
+
+  if [ "$RV32" -eq 1 ]; then
+    ./vgen -dii -rv32 || exit $?
+  else
+    ./vgen -dii || exit $?
+  fi
+
+  ./vcomp
+)
+build_rc=$?
+
+if [ "$build_rc" -ne 0 ]; then
+  echo "ERROR: Verilator build failed with code $build_rc" >&2
+  exit "$build_rc"
+fi
+
+RUNNER_ARGS=(full)
+if [ "$RV32" -eq 1 ]; then
+  RUNNER_ARGS+=(--sail-mode rv32)
+fi
+
 for ((i = 1; i <= N; i++)); do
   CURRENT_RUN="run ${i}"
   STARTED_RUNS=$((STARTED_RUNS + 1))
@@ -52,7 +111,7 @@ for ((i = 1; i <= N; i++)); do
   echo "===== run $i / $N ====="
 
   tmp_log="$(mktemp)"
-  python3 utils/scripts/run_cheriot_kudu_rvfi.py full 2>&1 | tee "$tmp_log"
+  python3 utils/scripts/run_cheriot_kudu_rvfi.py "${RUNNER_ARGS[@]}" 2>&1 | tee "$tmp_log"
   rc=${PIPESTATUS[0]}
 
   # Count Verilog simulation cases from the wrapper output.

@@ -38,6 +38,9 @@ GEN="auto"
 # testing CHERI capability behaviour. Override with --template random
 # (pure RV32I) or --template caprvcrandom (caprandom + RVC) etc.
 TEMPLATE="caprandom"
+SAIL_MODEL="cheriot"
+ARCHITECTURE=""
+TEMPLATE=""
 
 usage() {
   sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'
@@ -51,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     -a|--architecture)  ARCHITECTURE="$2"; shift 2 ;;
     -w|--work-dir)      WORK_DIR="$2"; shift 2 ;;
     -s|--seed)          SEED="$2"; shift 2 ;;
+    --sail-model) SAIL_MODEL="$2"; shift 2 ;;
     --clean)            CLEAN=1; shift ;;
     --gen)              GEN="$2"; shift 2 ;;
     --template)         TEMPLATE="$2"; shift 2 ;;
@@ -60,8 +64,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SAIL="${SCRIPT_DIR}/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32"
 SCRIPTS="${SCRIPT_DIR}/utils/scripts"
+
+# SAIL="${SCRIPT_DIR}/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32"
+case "${SAIL_MODEL}" in
+  cheriot)
+    SAIL="${SCRIPT_DIR}/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32"
+    : "${ARCHITECTURE:=rv32ecZifencei_Xcheriot}"
+    : "${TEMPLATE:=caprandom}"
+    ;;
+
+  rv32)
+    SAIL="${SCRIPT_DIR}/riscv-implementations/cheriot-sail/sail-riscv/c_emulator/riscv_rvfi_RV32"
+    : "${ARCHITECTURE:=rv32imc}"
+    : "${TEMPLATE:=random}"
+    ;;
+
+  *)
+    die "Unknown --sail-model '${SAIL_MODEL}' (use cheriot or rv32)"
+    ;;
+esac
 
 TRACE_DIR="${WORK_DIR}/traces"
 ELF_DIR="${WORK_DIR}/elfs"
