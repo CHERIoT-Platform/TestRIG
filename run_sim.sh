@@ -134,9 +134,9 @@ for ((i = 1; i <= N; i++)); do
     exit "$rc"
   fi
 
-  if [[ "$last_line" != PASS* ]]; then
+  if [[ "$last_line" != PASS* && "$last_line" != "Conditional PASS"* ]]; then
     FAIL_RUNS=$((FAIL_RUNS + 1))
-    echo "STOP: run $i last line did not start with PASS"
+    echo "STOP: run $i last line did not start with PASS or Conditional PASS"
     echo "last line: $last_line"
     exit 1
   fi

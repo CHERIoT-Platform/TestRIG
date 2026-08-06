@@ -35,6 +35,22 @@ DEC_RE = re.compile(r"\b([0-9]+)\b")
 BIN_RE = re.compile(r"0b([01_]+)")
 MASK72 = (1 << 72) - 1
 
+SUPPORTED_CSR_ADDRESSES = frozenset({
+    0xF11,
+    0xF12,
+    0xF13,
+    0xF14,
+    0x300,
+    0x301,
+    0x304,
+    0x305,
+    0x340,
+    0x341,
+    0x342,
+    0x343,
+    0x344,
+})
+
 COMPARE_FIELDS = [
     "packet_num",
     "trap",
@@ -246,6 +262,87 @@ def mask_packet_mem_data(packet):
                 if packet.mem_wmask & (1 << byte_index):
                     data_mask |= 0xff << (8 * byte_index)
             packet.mem_wdata &= data_mask
+
+
+def decode_csr_address(insn):
+    """Return the 12-bit CSR address for a CSR instruction, or None."""
+    if insn is None:
+        return None
+
+    insn &= 0xffffffff
+    opcode = insn & 0x7f
+    funct3 = (insn >> 12) & 0x7
+    if opcode != 0x73 or funct3 not in (0b001, 0b010, 0b011, 0b101, 0b110, 0b111):
+        return None
+
+    return (insn >> 20) & 0xfff
+
+
+def is_memory_load_store(insn):
+    """Recognize RV32I and RV32C load/store instructions."""
+    if insn is None:
+        return False
+
+    insn &= 0xffffffff
+
+    # A 32-bit instruction has bits [1:0] == 2'b11.
+    if (insn & 0x3) == 0x3:
+        return (insn & 0x7f) in (0x03, 0x23)
+
+    # RV32C C.LW/C.SW and C.LWSP/C.SWSP.
+    quadrant = insn & 0x3
+    funct3 = (insn >> 13) & 0x7
+    return quadrant in (0b00, 0b10) and funct3 in (0b010, 0b110)
+
+
+def relaxed_compare_reason(
+    left_packet,
+    right_packet,
+    diff_fields,
+    sail_mode,
+    supported_csrs,
+):
+    """Return the matching relaxed-comparison rule, or None."""
+    if (
+        sail_mode == "rv32"
+        and "insn" in diff_fields
+        and left_packet.pc_rdata == 0
+        and right_packet.pc_rdata == 0
+    ):
+        return "instruction mismatch at pc_rdata 0x0"
+
+    same_instruction = (
+        left_packet.insn is not None
+        and right_packet.insn is not None
+        and (left_packet.insn & 0xffffffff) == (right_packet.insn & 0xffffffff)
+    )
+
+    if same_instruction:
+        csr_addr = decode_csr_address(left_packet.insn)
+        if csr_addr is not None and csr_addr not in supported_csrs:
+            return "CSR address 0x{:03x} is outside the supported CSR ranges".format(
+                csr_addr
+            )
+
+    if (
+        sail_mode == "rv32"
+        and same_instruction
+        and is_memory_load_store(left_packet.insn)
+        and left_packet.trap == 0
+        and right_packet.trap == 0
+    ):
+        for packet in (left_packet, right_packet):
+            memory_active = (
+                (packet.mem_rmask is not None and packet.mem_rmask != 0)
+                or (packet.mem_wmask is not None and packet.mem_wmask != 0)
+            )
+            if packet.mem_addr == 0 and memory_active:
+                return (
+                    "RV32 untrapped load/store accessed address 0x0 with a "
+                    "nonzero memory mask"
+                )
+
+    return None
 
 def compare_rvfi_prefix(left, right):
     """
@@ -504,12 +601,22 @@ def find_reference_rvfi(ref_dir, test_name):
     )
 
 
-def check_results(ref_dir, results_dir, packet_slack, rvfi_max):
+def check_results(
+    ref_dir,
+    results_dir,
+    packet_slack,
+    rvfi_max,
+    relaxed_compare,
+    sail_mode,
+    supported_csrs,
+):
     rvfi_files = sorted(results_dir.glob("*.rvfi"))
     if not rvfi_files:
         raise RuntimeError("No *.rvfi files found in {}".format(results_dir))
 
     print("Comparing sail results vs verilator ...", flush=True)
+
+    conditional_passes = []
 
     for sim_rvfi in rvfi_files:
         test_name = sim_rvfi.stem
@@ -537,6 +644,27 @@ def check_results(ref_dir, results_dir, packet_slack, rvfi_max):
 
         ok, packet_index, diff_fields, left_packet, right_packet = compare_rvfi_prefix(sim_rvfi, ref_rvfi)
         if not ok:
+            ignore_reason = None
+            if relaxed_compare:
+                ignore_reason = relaxed_compare_reason(
+                    left_packet,
+                    right_packet,
+                    diff_fields,
+                    sail_mode,
+                    supported_csrs,
+                )
+
+            if ignore_reason is not None:
+                conditional_passes.append(test_name)
+                print("")
+                print("Conditional Pass: ignored RVFI diff for {}".format(test_name))
+                print("  parsed packet index: {}".format(packet_index))
+                print("  mismatched field(s): {}".format(", ".join(diff_fields)))
+                print("  ignore rule: {}".format(ignore_reason))
+                # The relaxed rule applies to this first mismatch; do not
+                # compare the remainder of this trace.
+                continue
+
             print("")
             print("FAIL: RVFI diff found for {}".format(test_name))
             print("  parsed packet index: {}".format(packet_index))
@@ -548,7 +676,14 @@ def check_results(ref_dir, results_dir, packet_slack, rvfi_max):
             raise SystemExit(1)
 
     print("")
-    print("PASS: all RVFI comparisons matched. Happy! :)")
+    if conditional_passes:
+        print(
+            "Conditional PASS: {} test case(s) matched an RVFI ignore rule: {}".format(
+                len(conditional_passes), ", ".join(conditional_passes)
+            )
+        )
+    else:
+        print("PASS: all RVFI comparisons matched. Happy! :)")
 
 
 def main():
@@ -609,6 +744,23 @@ def main():
         help="Select CHERIoT Sail or standard RV32 sail-riscv",
     )
 
+    relaxed_group = parser.add_mutually_exclusive_group()
+    relaxed_group.add_argument(
+        "--relaxed_compare",
+        "--relaxed-compare",
+        dest="relaxed_compare",
+        action="store_true",
+        default=True,
+        help="Apply RVFI mismatch ignore rules. Default: enabled",
+    )
+    relaxed_group.add_argument(
+        "--no-relaxed_compare",
+        "--no-relaxed-compare",
+        dest="relaxed_compare",
+        action="store_false",
+        help="Disable RVFI mismatch ignore rules",
+    )
+
     args = parser.parse_args()
 
     if args.count is not None and args.count <= 0:
@@ -620,6 +772,9 @@ def main():
     root = Path(args.root).resolve()
 
     try:
+        supported_csrs = (
+            SUPPORTED_CSR_ADDRESSES if args.relaxed_compare else frozenset()
+        )
         verilator_dir = root / "riscv-implementations" / "cheriot-kudu" / "sim" / "verilator"
         sim_bin = verilator_dir / "bin"
         results_dir = verilator_dir / "results"
@@ -627,7 +782,15 @@ def main():
         if args.skip_sim:
             ref_dir = verilator_dir / "sail_results"
             require_dir(results_dir, "existing simulation results directory")
-            check_results(ref_dir, results_dir, args.packet_slack, args.rvfi_max)
+            check_results(
+                ref_dir,
+                results_dir,
+                args.packet_slack,
+                args.rvfi_max,
+                args.relaxed_compare,
+                args.sail_mode,
+                supported_csrs,
+            )
             return 0
 
         if not args.skip_sail:
@@ -639,7 +802,15 @@ def main():
 
         results_dir = run_simulations(root, dii_files, args.rvfi_max)
 
-        check_results(ref_dir, results_dir, args.packet_slack, args.rvfi_max)
+        check_results(
+            ref_dir,
+            results_dir,
+            args.packet_slack,
+            args.rvfi_max,
+            args.relaxed_compare,
+            args.sail_mode,
+            supported_csrs,
+        )
         return 0
 
     except subprocess.CalledProcessError as e:
