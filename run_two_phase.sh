@@ -76,7 +76,7 @@ case "${SAIL_MODEL}" in
 
   rv32)
     SAIL="${SCRIPT_DIR}/riscv-implementations/cheriot-sail/sail-riscv/c_emulator/riscv_rvfi_RV32"
-    : "${ARCHITECTURE:=rv32imc}"
+    : "${ARCHITECTURE:=rv32imac}"
     : "${TEMPLATE:=random}"
     ;;
 

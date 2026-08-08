@@ -126,7 +126,7 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
           ]
 
   return $ dist [ (20, legalCHERILoadStore baseOffset)
-                -- , (15, incrMTCC)
+                , (if has_a arch then 10 else 0, legalAtomicOps baseOffset)
                 , (20, instUniform $ rv32iWithoutMret)
                 , (10, instUniform $ rv32_xcheri arch srcAddr srcData srcScr imm mop dest)
                 , (10, gen_rv_c)

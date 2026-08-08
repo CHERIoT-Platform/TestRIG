@@ -42,6 +42,7 @@ done
 TOTAL_RUNS=0
 STARTED_RUNS=0
 PASS_RUNS=0
+COND_PASS_RUNS=0
 FAIL_RUNS=0
 
 VERILOG_SIM_CASES=0
@@ -50,15 +51,16 @@ CURRENT_RUN=""
 
 print_summary() {
   echo ""
-  echo "===== run_sim.sh summary ====="
-  echo "Total wrapper runs requested : ${TOTAL_RUNS}"
-  echo "Wrapper runs started         : ${STARTED_RUNS}"
-  echo "Wrapper runs passed          : ${PASS_RUNS}"
-  echo "Wrapper runs failed          : ${FAIL_RUNS}"
-  echo "Verilog simulation cases     : ${VERILOG_SIM_CASES}"
+  echo "============ run_sim.sh summary ============"
+  echo "Total wrapper runs requested        : ${TOTAL_RUNS}"
+  echo "Wrapper runs started                : ${STARTED_RUNS}"
+  echo "Wrapper runs passed                 : ${PASS_RUNS}"
+  echo "Wrapper runs conditionally passed   : ${COND_PASS_RUNS}"
+  echo "Wrapper runs failed                 : ${FAIL_RUNS}"
+  echo "Verilog simulation cases            : ${VERILOG_SIM_CASES}"
 
   if [ -n "${CURRENT_RUN}" ]; then
-    echo "Last wrapper run             : ${CURRENT_RUN}"
+    echo "Last wrapper run                    : ${CURRENT_RUN}"
   fi
 
   #if [ -n "${LAST_VERILOG_CASE}" ]; then
@@ -141,9 +143,17 @@ for ((i = 1; i <= N; i++)); do
     exit 1
   fi
 
-  PASS_RUNS=$((PASS_RUNS + 1))
+  if [[ "$last_line" == "Conditional PASS"* ]]; then
+    COND_PASS_RUNS=$((COND_PASS_RUNS + 1))
+  else
+    PASS_RUNS=$((PASS_RUNS + 1))
+  fi
+   
 done
 
 CURRENT_RUN=""
+
+print_summary
+trap - EXIT
 
 echo "PASS: completed $N successful wrapper run(s)"

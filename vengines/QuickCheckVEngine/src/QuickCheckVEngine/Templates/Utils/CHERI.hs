@@ -40,6 +40,7 @@ module QuickCheckVEngine.Templates.Utils.CHERI (
 , makeCap_core
 , makeShortCap
 , legalCHERILoadStore
+, legalAtomicOps
 -- , loadRegion -- Unused, so not fully updating for CHERIoT
 -- , switchEncodingMode
 , cspecialRWChain
@@ -140,7 +141,7 @@ legalCHERILoadStore baseOffset =
     let arch = archDesc param
 
     capReg <- suchThat src (/= 0)
-    count  <- choose (0, 3)
+    count  <- choose (0, 2)
 
     middle <- vectorOf count $ do
       srcAddr <- src
@@ -157,7 +158,7 @@ legalCHERILoadStore baseOffset =
         ++ rv32_xcheri_misc srcAddr srcData srcScr imm dst
         )
 
-    memOpCount <- choose (1, 2)
+    memOpCount <- choose (1, 3)
     memOps <- vectorOf memOpCount $ do
       offset <- choose (0x0, 0x7)
       rd     <- dest
@@ -187,6 +188,65 @@ legalCHERILoadStore baseOffset =
     return $ instSeq $
       [cspecialrw capReg 29 0] ++ middle ++ memOps
 
+-- Generate legal, word-aligned RV32A AMOs through mtdc, using the same
+-- sequence structure as legalCHERILoadStore.  RV32A atomic instructions do
+-- not have an immediate field, so each operation first derives its exact
+-- address in amoAddr and then uses amoAddr as rs1.
+legalAtomicOps :: Integer -> Template
+legalAtomicOps baseOffset =
+  readParams $ \param -> random $ do
+    let arch = archDesc param
+
+    capReg <- suchThat src (/= 0)
+    count  <- choose (0, 2)
+
+    middle <- vectorOf count $ do
+      srcAddr <- src
+      srcData <- src
+      srcScr  <- elements [30]
+      imm     <- bits 12
+      longImm <- bits 20
+      dst     <- dest
+      -- "middle" part of the sequence, exclude jump/branches for now
+      elements
+        (  rv32_i_arith srcAddr srcData dst imm longImm
+        ++ rv32_xcheri_inspection srcAddr dst
+        ++ rv32_xcheri_arithmetic srcAddr srcData imm dst
+        ++ rv32_xcheri_misc srcAddr srcData srcScr imm dst
+        )
+
+    atomicOpCount <- choose (1, 2)
+    atomicOps <- fmap concat $ vectorOf atomicOpCount $ do
+      amoAddr <- suchThat dest (\r -> r /= 0)
+      rs2     <- src
+      rd      <- dest
+      aq      <- bits 1
+      rl      <- bits 1
+
+      -- Atomic word accesses must be four-byte aligned.
+      offset <- elements [0x0, 0x4]
+      let atomicOffset =
+            (baseOffset + offset) Data.Bits..&. 0x7fc
+
+      atomicOp <- elements
+        [ amoswap_w rd amoAddr rs2 aq rl
+        , amoadd_w  rd amoAddr rs2 aq rl
+        , amoxor_w  rd amoAddr rs2 aq rl
+        , amoand_w  rd amoAddr rs2 aq rl
+        , amoor_w   rd amoAddr rs2 aq rl
+        , amomin_w  rd amoAddr rs2 aq rl
+        , amomax_w  rd amoAddr rs2 aq rl
+        , amominu_w rd amoAddr rs2 aq rl
+        , amomaxu_w rd amoAddr rs2 aq rl
+        ]
+
+      return
+        [ cincaddrimm amoAddr capReg atomicOffset
+        , atomicOp
+        ]
+
+    return $ instSeq $
+      [cspecialrw capReg 29 0] ++ middle ++ atomicOps
 
 loadTags :: Integer -> Integer -> Template
 loadTags addrReg capReg = random $ do
@@ -238,6 +298,7 @@ loadTags addrReg capReg = random $ do
 --                    , csetflags tmpReg1 tmpReg1 tmpReg2
 --                    , cspecialrw 0 28 tmpReg1 --Also write trap vector so we stay in cap mode
 --                    , jalr_cap 0 tmpReg1 ]
+
 
 cspecialRWChain :: Template
 cspecialRWChain = random $ do
