@@ -33,6 +33,8 @@
 --
 
 module QuickCheckVEngine.Templates.RandomTest (
+  legalLoadStore,
+  randomLoadStoreTest,
   randomTest
 ) where
 
@@ -46,6 +48,106 @@ import QuickCheckVEngine.Templates.GenCompressed (gen_rv_c)
 randomizeIntRegs :: Template
 randomizeIntRegs =
   mconcat [prepReg32 reg | reg <- [1..15]]
+
+-- | Generate one to three naturally aligned RV32 load, store, or AMO
+-- operations relative to a register initialized with 'baseOffset'.
+legalLoadStore :: Integer -> Template
+legalLoadStore baseOffset = readParams $ \params -> random $ do
+  let desc = archDesc params
+
+  addrReg    <- suchThat src (/= 0)
+  amoAddrReg <- suchThat dest (\r -> r /= 0 && r /= addrReg)
+  opCount    <- choose (1, 3)
+
+  memOps <- fmap concat $ vectorOf opCount $ do
+    loadDest <- suchThat dest (/= addrReg)
+    storeData <- src
+    aq <- bits 1
+    rl <- bits 1
+
+    let byteOp = do
+          offset <- choose (-8, 7)
+          op <- elements
+            [ lb  loadDest addrReg offset
+            , lbu loadDest addrReg offset
+            , sb  addrReg storeData offset
+            ]
+          return [op]
+
+        halfOp = do
+          offset <- elements [-8, -6, -4, -2, 0, 2, 4, 6]
+          op <- elements
+            [ lh  loadDest addrReg offset
+            , lhu loadDest addrReg offset
+            , sh  addrReg storeData offset
+            ]
+          return [op]
+
+        wordOp = do
+          offset <- elements [-8, -4, 0, 4]
+          op <- elements
+            [ lw loadDest addrReg offset
+            , sw addrReg storeData offset
+            ]
+          return [op]
+
+        atomicOp = do
+          -- AMO*.W has no immediate field, so first form base+offset in
+          -- a temporary address register.  Both base and offset are
+          -- four-byte aligned.
+          offset <- elements [-8, -4, 0, 4]
+          op <- elements
+            [ amoswap_w loadDest amoAddrReg storeData aq rl
+            , amoadd_w  loadDest amoAddrReg storeData aq rl
+            , amoxor_w  loadDest amoAddrReg storeData aq rl
+            , amoand_w  loadDest amoAddrReg storeData aq rl
+            , amoor_w   loadDest amoAddrReg storeData aq rl
+            , amomin_w  loadDest amoAddrReg storeData aq rl
+            , amomax_w  loadDest amoAddrReg storeData aq rl
+            , amominu_w loadDest amoAddrReg storeData aq rl
+            , amomaxu_w loadDest amoAddrReg storeData aq rl
+            ]
+          return [addi amoAddrReg addrReg offset, op]
+
+        -- Weight each class by its instruction count, making every
+        -- individual load, store, and AMO operation equiprobable.
+        opChoices =
+          [ (3, byteOp)
+          , (3, halfOp)
+          , (2, wordOp)
+          ] ++ if has_a desc then [(9, atomicOp)] else []
+
+    frequency opChoices
+
+  return $ li32 addrReg baseOffset <> instSeq memOps
+
+genRandomLoadStoreTest :: Integer -> Template
+genRandomLoadStoreTest baseOffset = readParams $ \params -> random $ do
+  let desc = archDesc params
+
+  src1    <- src
+  src2    <- src
+  destReg <- dest
+  imm     <- bits 12
+  longImm <- bits 20
+
+  return $ dist
+    [ (30, instUniform $ rv32_i_arith src1 src2 destReg imm longImm)
+    , (if has_m desc then 20 else 0,
+       instUniform $ rv32_m src1 src2 destReg)
+    , (10, legalLoadStore baseOffset)
+    , (1, randomizeIntRegs)
+    ]
+
+-- | Random RV32IM/A arithmetic and memory test with a test-wide base address.
+randomLoadStoreTest :: Template
+randomLoadStoreTest = random $ do
+  -- Test-wide 32-bit value 0x08xxxxxx with bits [1:0] fixed to zero.
+  low22 <- bits 22
+  let baseOffset = 0x08000000 + 4 * low22
+
+  return $
+    randomizeIntRegs <> repeatTillEnd (genRandomLoadStoreTest baseOffset)
 
 -- | 'randomTest' provides a 'Template' for a random test
 randomTest :: Template

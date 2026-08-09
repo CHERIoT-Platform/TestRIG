@@ -309,6 +309,7 @@ allTests = [
            , ("interrupt",  "Interrupt Testing Template",                             const True,                               genInterruptTest)
            , ("all",        "All Verification",                                       const True,                               genAll)
            , ("random",     "Random Template",                                        const True,                               randomTest)
+           , ("rv32mem",    "RV32 Random Load/Store Template",                        andPs [has_xlen_32, has_m, has_a, not . has_cheri], randomLoadStoreTest)
            ]
   where andPs = foldl (\k p x -> p x && k x) (const True)
 
