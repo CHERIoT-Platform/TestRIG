@@ -9,8 +9,8 @@ Modes:
   quick  -> docker compose up testrig-quicktest
   full   -> docker compose up testrig-fulltest
 
-Use --count to override the number of generated tests, for example:
-  run_cheriot_kudu_rvfi.py full --count 500
+Use --case_cnt to override the number of generated tests, for example:
+  run_cheriot_kudu_rvfi.py full --case_cnt 500
 """
 
 import argparse
@@ -453,18 +453,31 @@ def require_dir(path, description):
 
 # ---- workflow steps ----
 
-def run_testrig(root, size_mode, sail_mode, count=None):
+def run_testrig(
+    root,
+    size_mode,
+    sail_mode,
+    count=None,
+    phase1_instr_count=1000,
+    phase2_instr_count=None,
+    test_name=None,
+):
     if count is None:
         count = 10 if size_mode == "quick" else 100
 
     sail_model = "rv32" if sail_mode == "rv32" else "cheriot"
 
-    command = (
-        "./run_two_phase.sh "
-        "--count {} "
-        "--sail-model {} "
-        "--clean"
-    ).format(count, sail_model)
+    command_args = [
+        "./run_two_phase.sh",
+        "--case_cnt", str(count),
+        "--phase1_instr_count", str(phase1_instr_count),
+        "--phase2_instr_count", str(phase2_instr_count),
+        "--sail-model", sail_model,
+        "--clean",
+    ]
+    if test_name is not None:
+        command_args.extend(["--test", test_name])
+    command = " ".join(shlex.quote(arg) for arg in command_args)
 
     run_cmd(
         [
@@ -705,10 +718,20 @@ def main():
     )
 
     parser.add_argument(
-        "--rvfi_max",
+        "--phase1_instr_count",
         type=int,
         default=1000,
-        help="Verilator +RVFI_MAX value. Default: 1000",
+        help="Phase-1 generated instruction count. Default: 1000",
+    )
+
+    parser.add_argument(
+        "--phase2_instr_count",
+        "--rvfi_max",
+        dest="phase2_instr_count",
+        type=int,
+        default=None,
+        help="Phase-2 Sail instruction limit and Verilator +RVFI_MAX value. "
+             "Default: phase1_instr_count",
     )
 
     parser.add_argument(
@@ -719,10 +742,18 @@ def main():
     )
 
     parser.add_argument(
+        "--case_cnt",
         "--count",
+        dest="case_cnt",
         type=int,
         default=None,
-        help="Override the number of TestRIG tests, for example: --count 500",
+        help="Override the number of TestRIG test cases, for example: --case_cnt 500",
+    )
+
+    parser.add_argument(
+        "--test",
+        default=None,
+        help="TestRIG template/test name, for example: caprandom",
     )
 
     parser.add_argument(
@@ -763,8 +794,16 @@ def main():
 
     args = parser.parse_args()
 
-    if args.count is not None and args.count <= 0:
-        parser.error("--count must be greater than zero")
+    if args.phase1_instr_count <= 0:
+        parser.error("--phase1_instr_count must be greater than zero")
+
+    if args.phase2_instr_count is None:
+        args.phase2_instr_count = args.phase1_instr_count
+    elif args.phase2_instr_count <= 0:
+        parser.error("--phase2_instr_count must be greater than zero")
+
+    if args.case_cnt is not None and args.case_cnt <= 0:
+        parser.error("--case_cnt must be greater than zero")
 
     if not args.skip_sail and not args.skip_sim and args.mode is None:
         parser.error("mode is required unless --skip-sail or --skip-sim is specified")
@@ -786,7 +825,7 @@ def main():
                 ref_dir,
                 results_dir,
                 args.packet_slack,
-                args.rvfi_max,
+                args.phase2_instr_count,
                 args.relaxed_compare,
                 args.sail_mode,
                 supported_csrs,
@@ -794,19 +833,27 @@ def main():
             return 0
 
         if not args.skip_sail:
-            run_testrig(root, args.mode, args.sail_mode, args.count)
+            run_testrig(
+                root,
+                args.mode,
+                args.sail_mode,
+                args.case_cnt,
+                args.phase1_instr_count,
+                args.phase2_instr_count,
+                args.test,
+            )
         # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)
         ref_dir = root / "two_phase_output" / "results"
         dii_files = convert_elfs_to_dii(root, sim_bin)
 
-        results_dir = run_simulations(root, dii_files, args.rvfi_max)
+        results_dir = run_simulations(root, dii_files, args.phase2_instr_count)
 
         check_results(
             ref_dir,
             results_dir,
             args.packet_slack,
-            args.rvfi_max,
+            args.phase2_instr_count,
             args.relaxed_compare,
             args.sail_mode,
             supported_csrs,

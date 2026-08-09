@@ -297,7 +297,7 @@ allTests = [
           --  , ("pte",        "PTE Verification",                                       has_s,                                    T.repeatN 2 $ T.uniform [gen_pte_perms, gen_pte_trans]) -- CHERIoT lacks supervisor mode
            , ("hpm",        "HPM Verification",                                       andPs [has_icsr, has_ihpm],               T.repeatTillEnd genHPM)
            , ("capinspect", "Xcheri Extension Capability Inspection Verification",    has_cheri,                                T.repeatTillEnd genCHERIinspection)
-           , ("caparith",   "Xcheri Extension Capability Arithmetic Verification",    has_cheri,                                T.repeatTillEnd genCHERIarithmetic)
+           , ("caparith",   "Xcheri Extension Capability Arithmetic Verification",    has_cheri,                                randomCHERIArithTest)
            , ("capmisc",    "Xcheri Extension Capability Miscellaneous Verification", has_cheri,                                T.repeatTillEnd genCHERImisc)
            , ("capcontrol", "Xcheri Extension Capability Control Flow Verification",  has_cheri,                                T.repeatTillEnd genCHERIcontrol)
            , ("capcache",   "Xcheri Extension Cache Verification",                    has_cheri,                                T.repeatTillEnd gen_rv32_Xcheri_cache)

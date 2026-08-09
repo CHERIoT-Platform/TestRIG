@@ -3,19 +3,50 @@
 set -u
 
 usage() {
-  echo "Usage: $0 [-rv32] [N]"
-  echo "  -rv32  Build and run in RV32 mode"
-  echo "  N      Number of wrapper runs (default: 1000)"
+  echo "Usage: $0 [-rv32] [--phase1_instr_count N] [--phase2_instr_count N]"
+  echo "          [--test TEST_NAME] [--case_cnt N] [N]"
+  echo "  -rv32                  Build and run in RV32 mode"
+  echo "  --phase1_instr_count N Phase-1 generated instruction count (default: 1000)"
+  echo "  --phase2_instr_count N Phase-2 Sail/Verilator instruction limit"
+  echo "                         (default: phase1_instr_count)"
+  echo "  --test TEST_NAME       TestRIG template/test name (default: caprandom)"
+  echo "  --case_cnt N           Number of test cases per wrapper run"
+  echo "  N                      Number of wrapper runs (default: 1000)"
 }
 
 N=1000
 N_SET=0
 RV32=0
+PHASE1_INSTR_COUNT=1000
+PHASE2_INSTR_COUNT=""
+TEST_NAME="caprandom"
+CASE_CNT=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -rv32)
       RV32=1
+      shift
+      ;;
+    --phase1_instr_count)
+      [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage >&2; exit 2; }
+      PHASE1_INSTR_COUNT="$2"
+      shift 2
+      ;;
+    --phase2_instr_count)
+      [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage >&2; exit 2; }
+      PHASE2_INSTR_COUNT="$2"
+      shift 2
+      ;;
+    --test)
+      [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage >&2; exit 2; }
+      TEST_NAME="$2"
+      shift 2
+      ;;
+    --case_cnt)
+      [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage >&2; exit 2; }
+      CASE_CNT="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -34,10 +65,12 @@ while [ "$#" -gt 0 ]; do
       fi
       N="$1"
       N_SET=1
+      shift
       ;;
   esac
-  shift
 done
+
+: "${PHASE2_INSTR_COUNT:=${PHASE1_INSTR_COUNT}}"
 
 TOTAL_RUNS=0
 STARTED_RUNS=0
@@ -80,8 +113,22 @@ if [ "$N" -eq 0 ]; then
   exit 2
 fi
 
+for value_name in PHASE1_INSTR_COUNT PHASE2_INSTR_COUNT; do
+  value="${!value_name}"
+  if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: ${value_name,,} must be a positive integer" >&2
+    exit 2
+  fi
+done
+
+if [ -n "$CASE_CNT" ] && ! [[ "$CASE_CNT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: case_cnt must be a positive integer" >&2
+  exit 2
+fi
+
 TOTAL_RUNS="${N}"
 
+echo "Test name: ${TEST_NAME}"
 echo "===== building Verilator model ====="
 (
   cd riscv-implementations/cheriot-kudu/sim/verilator || exit 1
@@ -105,12 +152,20 @@ RUNNER_ARGS=(full)
 if [ "$RV32" -eq 1 ]; then
   RUNNER_ARGS+=(--sail-mode rv32)
 fi
+RUNNER_ARGS+=(
+  --phase1_instr_count "$PHASE1_INSTR_COUNT"
+  --phase2_instr_count "$PHASE2_INSTR_COUNT"
+)
+RUNNER_ARGS+=(--test "$TEST_NAME")
+if [ -n "$CASE_CNT" ]; then
+  RUNNER_ARGS+=(--case_cnt "$CASE_CNT")
+fi
 
 for ((i = 1; i <= N; i++)); do
   CURRENT_RUN="run ${i}"
   STARTED_RUNS=$((STARTED_RUNS + 1))
 
-  echo "===== run $i / $N ====="
+  echo "===== run $TEST_NAME $i / $N ====="
 
   tmp_log="$(mktemp)"
   python3 utils/scripts/run_cheriot_kudu_rvfi.py "${RUNNER_ARGS[@]}" 2>&1 | tee "$tmp_log"

@@ -10,16 +10,18 @@
 # Phase 2: re-execute each ELF in Sail with all trace channels on
 #          (-v) and capture the full Sail log: results/trace_NNN_sail.log.
 #
-# Usage: ./run_two_phase.sh [--count N] [--instructions N]
+# Usage: ./run_two_phase.sh [--case_cnt N] [--phase1_instr_count N]
+#                           [--phase2_instr_count N]
 #                           [--architecture ARCH] [--work-dir DIR]
 #                           [--clean] [--seed N]
 #                           [--gen auto|qcvengine|python]
-#                           [--template LABEL]
+#                           [--test TEST_NAME]
 
 set -euo pipefail
 
 COUNT=10
 INSTRUCTIONS=1000
+PHASE2_INSTRUCTIONS=""
 ARCHITECTURE="rv32ecZifencei_Xcheriot"
 WORK_DIR="./two_phase_output"
 SEED=""
@@ -49,18 +51,37 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -c|--count)         COUNT="$2"; shift 2 ;;
-    -n|--instructions)  INSTRUCTIONS="$2"; shift 2 ;;
+    -c|--count|--case_cnt)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
+      COUNT="$2"; shift 2 ;;
+    -n|--instructions|--phase1_instr_count)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
+      INSTRUCTIONS="$2"; shift 2 ;;
+    --phase2_instr_count)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
+      PHASE2_INSTRUCTIONS="$2"; shift 2 ;;
     -a|--architecture)  ARCHITECTURE="$2"; shift 2 ;;
     -w|--work-dir)      WORK_DIR="$2"; shift 2 ;;
     -s|--seed)          SEED="$2"; shift 2 ;;
     --sail-model) SAIL_MODEL="$2"; shift 2 ;;
     --clean)            CLEAN=1; shift ;;
     --gen)              GEN="$2"; shift 2 ;;
-    --template)         TEMPLATE="$2"; shift 2 ;;
+    --template|--test)
+      [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
+      TEMPLATE="$2"; shift 2 ;;
     -h|--help)          usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
+done
+
+: "${PHASE2_INSTRUCTIONS:=${INSTRUCTIONS}}"
+
+for value_name in COUNT INSTRUCTIONS PHASE2_INSTRUCTIONS; do
+  value="${!value_name}"
+  if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: ${value_name,,} must be a positive integer" >&2
+    exit 2
+  fi
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -207,6 +228,7 @@ python3 "${SCRIPTS}/run_two_phase_execution.py" \
   --output-dir "${RESULTS_DIR}" \
   --rvfi-bin-dir "${PHASE2_RVFI_BIN_DIR}" \
   --sail-path "${SAIL}" \
+  --inst-limit "${PHASE2_INSTRUCTIONS}" \
   --skip-ibex
 N_RVFI=$(find "${RESULTS_DIR}" -maxdepth 1 -name '*_sail.log' | wc -l | tr -d ' ')
 N_P2_BIN=$(find "${PHASE2_RVFI_BIN_DIR}" -maxdepth 1 -name '*_phase2.rvfi.bin' | wc -l | tr -d ' ')
@@ -238,6 +260,7 @@ Two-phase execution summary
 date:                 $(date)
 architecture:         ${ARCHITECTURE}
 count:                ${COUNT} traces × ${INSTRUCTIONS} instructions
+phase-2 instr limit:  ${PHASE2_INSTRUCTIONS}
 
 Phase 1 — generator → Sail (-f) → ELF
   hex traces:         ${N_TRACES}      (${TRACE_DIR}/trace_*.hex.txt)

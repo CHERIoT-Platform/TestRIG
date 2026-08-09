@@ -38,6 +38,7 @@ module QuickCheckVEngine.Templates.GenCHERI (
   -- gen_simple_cclear, -- CHERIoT lacks cclear instr
   -- gen_simple_fpclear, -- CHERIoT lacks fpclear instr
   randomCHERITest,
+  randomCHERIArithTest,
   randomCHERIRVCTest
 ) where
 
@@ -141,6 +142,55 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
                 , (if has_nocloadtags arch then 0 else 10, loadTags srcAddr srcData)
                 ]
 
+genRandomCHERIArithTest :: Template
+genRandomCHERIArithTest = random $ do
+  srcAny1       <- choose (0, 15)
+  srcAny2       <- choose (0, 15)
+  srcCapModify  <- choose (8, 15)
+  destCapModify <- choose (8, 15)
+  destOther     <- choose (0, 7)
+  imm           <- bits 12
+  longImm       <- bits 20
+
+  let rv32_arith =
+        rv32_i_arith srcAny1 srcAny2 destOther imm longImm
+
+      -- CHERIoT names cincaddr/cincaddrimm replace the generic CHERI
+      -- names cincoffset/cincoffsetimm.  These capability-modification
+      -- instructions keep both rs1 and rd in the upper register bank.
+      cheri_modify =
+        [ csetaddr            destCapModify srcCapModify srcAny2
+        , cincaddr            destCapModify srcCapModify srcAny2
+        , cincaddrimm         destCapModify srcCapModify      imm
+        , csetbounds          destCapModify srcCapModify srcAny2
+        , csetboundsimmediate destCapModify srcCapModify      imm
+        , cseal               destCapModify srcCapModify srcAny2
+        , cunseal             destCapModify srcCapModify srcAny2
+        ]
+
+      -- All remaining CHERI arithmetic instructions write only x0-x7.
+      cheri_other =
+        [ csethigh       destOther srcAny1 srcAny2
+        , csetboundsexact destOther srcAny1 srcAny2
+        , csub           destOther srcAny1 srcAny2
+        , ctestsubset     destOther srcAny1 srcAny2
+        , csetequalexact  destOther srcAny1 srcAny2
+        ]
+
+      cheri_arith = cheri_modify ++ cheri_other
+
+  return $ dist
+    [ (100, instUniform rv32_arith)
+    , (50, instUniform cheri_arith)
+    , (1, randomizeCapRegAddrs)
+    ]
+
+randomCHERIArithTest :: Template
+randomCHERIArithTest = mconcat
+  [ randomizeCapRegAddrs
+  , repeatTillEnd genRandomCHERIArithTest
+  ]
+
 genRandomCHERITestNoJump :: Integer -> Template
 genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
     let arch = archDesc param
@@ -222,7 +272,7 @@ randomCHERIRVCTest = random $ do
 randomCHERITest :: Template
 randomCHERITest =
   fp_prologue $ random $ do
-    -- Persistent 10-bit, four-byte-aligned value: 0x000â0x3fc.
+    -- Persistent 10-bit, four-byte-aligned value: 0x000-0x3fc.
     baseOffset <- (* 4) <$> choose (0, 255)
     return $ mconcat
       [ randomizeCapRegAddrs
