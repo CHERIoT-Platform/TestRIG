@@ -66,7 +66,7 @@ legalLoadStore baseOffset = readParams $ \params -> random $ do
     rl <- bits 1
 
     let byteOp = do
-          offset <- choose (-8, 7)
+          offset <- choose (-128, 127)
           op <- elements
             [ lb  loadDest addrReg offset
             , lbu loadDest addrReg offset

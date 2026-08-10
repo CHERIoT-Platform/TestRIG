@@ -22,7 +22,7 @@ def parse_args():
                    help='where to write ELF dumps')
     p.add_argument('--sail-path', required=True,
                    help='path to cheri_riscv_rvfi_RV32 binary')
-    p.add_argument('--inst-limit', type=int, default=10000)
+    # p.add_argument('--inst-limit', type=int, default=10000)
     p.add_argument('--input-pattern', default='trace_*.hex.txt')
     p.add_argument('--rvfi-bin-dir',
                    help='also write binary RVFI v1 trace here '
@@ -63,8 +63,9 @@ def main():
     for i, t in enumerate(traces, 1):
         name = stem(op.basename(t))
         elf = op.join(args.output_dir, f'{name}.elf')
-        cmd = [args.sail_path, '-f', t, '--elf-output', elf,
-               '-l', str(args.inst_limit)]
+        # cmd = [args.sail_path, '-f', t, '--elf-output', elf,
+        #       '-l', str(args.inst_limit)]
+        cmd = [args.sail_path, '-f', t, '--elf-output', elf]
         if args.rvfi_bin_dir:
             rvfi_bin = op.join(args.rvfi_bin_dir, f'{name}.rvfi.bin')
             cmd += ['--rvfi-output', rvfi_bin]
@@ -76,10 +77,16 @@ def main():
             # the whole batch even though the ELF was produced fine.
             r = subprocess.run(cmd, capture_output=True, text=True,
                                errors='replace', timeout=60)
+
         except subprocess.TimeoutExpired:
             fail += 1
             print(f'  [{i}/{len(traces)}] TIMEOUT {name}')
             continue
+
+        if r.returncode == 0 :
+            print('I am there\n')
+            print(cmd)
+
         if r.returncode == 0 and op.isfile(elf):
             ok += 1
             if args.verbose or i % 10 == 0 or i == len(traces):
