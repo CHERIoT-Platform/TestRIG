@@ -83,9 +83,9 @@ def main():
             print(f'  [{i}/{len(traces)}] TIMEOUT {name}')
             continue
 
-        if r.returncode == 0 :
-            print('I am there\n')
-            print(cmd)
+        #if r.returncode == 0 :
+        #    print('I am there\n')
+        #    print(cmd)
 
         if r.returncode == 0 and op.isfile(elf):
             ok += 1

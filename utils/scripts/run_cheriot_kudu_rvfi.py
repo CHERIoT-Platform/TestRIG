@@ -5,12 +5,8 @@ and compare Kudu RVFI traces against Sail/TestRIG phase-2 RVFI traces.
 
 Expected to be run from the TestRIG repository root, or use --root.
 
-Modes:
-  quick  -> docker compose up testrig-quicktest
-  full   -> docker compose up testrig-fulltest
-
 Use --case_cnt to override the number of generated tests, for example:
-  run_cheriot_kudu_rvfi.py full --case_cnt 500
+  run_cheriot_kudu_rvfi.py --case_cnt 500
 """
 
 import argparse
@@ -455,21 +451,22 @@ def require_dir(path, description):
 
 def run_testrig(
     root,
-    size_mode,
     sail_mode,
-    count=None,
+    case_cnt=100,
     phase1_instr_count=1000,
     phase2_instr_count=None,
     test_name=None,
 ):
-    if count is None:
-        count = 10 if size_mode == "quick" else 100
+    if case_cnt is None:
+        case_cnt = 100
+    if phase2_instr_count is None:
+        phase2_instr_count = phase1_instr_count
 
     sail_model = "rv32" if sail_mode == "rv32" else "cheriot"
 
     command_args = [
         "./run_two_phase.sh",
-        "--case_cnt", str(count),
+        "--case_cnt", str(case_cnt),
         "--phase1_instr_count", str(phase1_instr_count),
         "--phase2_instr_count", str(phase2_instr_count),
         "--sail-model", sail_model,
@@ -705,13 +702,6 @@ def main():
     )
 
     parser.add_argument(
-        "mode",
-        nargs="?",
-        choices=["quick", "full"],
-        help="Sail/TestRIG mode: quick runs testrig-quicktest, full runs testrig-fulltest",
-    )
-
-    parser.add_argument(
         "--root",
         default=".",
         help="TestRIG repository root. Default: current directory",
@@ -746,8 +736,8 @@ def main():
         "--count",
         dest="case_cnt",
         type=int,
-        default=None,
-        help="Override the number of TestRIG test cases, for example: --case_cnt 500",
+        default=100,
+        help="Number of TestRIG test cases. Default: 100",
     )
 
     parser.add_argument(
@@ -772,7 +762,7 @@ def main():
         "--sail-mode",
         choices=["cheriot", "rv32"],
         default="cheriot",
-        help="Select CHERIoT Sail or standard RV32 sail-riscv",
+        help="Select CHERIoT Sail or standard RV32 sail-riscv. Default: cheriot",
     )
 
     relaxed_group = parser.add_mutually_exclusive_group()
@@ -802,11 +792,8 @@ def main():
     elif args.phase2_instr_count <= 0:
         parser.error("--phase2_instr_count must be greater than zero")
 
-    if args.case_cnt is not None and args.case_cnt <= 0:
+    if args.case_cnt <= 0:
         parser.error("--case_cnt must be greater than zero")
-
-    if not args.skip_sail and not args.skip_sim and args.mode is None:
-        parser.error("mode is required unless --skip-sail or --skip-sim is specified")
 
     root = Path(args.root).resolve()
 
@@ -834,13 +821,12 @@ def main():
 
         if not args.skip_sail:
             run_testrig(
-                root,
-                args.mode,
-                args.sail_mode,
-                args.case_cnt,
-                args.phase1_instr_count,
-                args.phase2_instr_count,
-                args.test,
+                root=root,
+                sail_mode=args.sail_mode,
+                case_cnt=args.case_cnt,
+                phase1_instr_count=args.phase1_instr_count,
+                phase2_instr_count=args.phase2_instr_count,
+                test_name=args.test,
             )
         # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)

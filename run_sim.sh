@@ -148,7 +148,7 @@ if [ "$build_rc" -ne 0 ]; then
   exit "$build_rc"
 fi
 
-RUNNER_ARGS=(full)
+RUNNER_ARGS=()
 if [ "$RV32" -eq 1 ]; then
   RUNNER_ARGS+=(--sail-mode rv32)
 fi
