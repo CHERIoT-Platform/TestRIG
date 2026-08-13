@@ -149,13 +149,13 @@ legalCHERILoadStore baseOffset =
       srcScr  <- elements [30]
       imm     <- bits 12
       longImm <- bits 20
-      dst <- dest
+      otherDst <- suchThat dest (/= capReg)
       -- "middle" part of the sequence, exclude jump/branches for now
       elements
-        (  rv32_i_arith srcAddr srcData dst imm longImm
-        ++ rv32_xcheri_inspection srcAddr dst
-        ++ rv32_xcheri_arithmetic srcAddr srcData imm dst
-        ++ rv32_xcheri_misc srcAddr srcData srcScr imm dst
+        (  rv32_i_arith srcAddr srcData otherDst imm longImm
+        ++ rv32_xcheri_inspection srcAddr otherDst
+        ++ rv32_xcheri_arithmetic srcAddr srcData imm capReg
+        ++ rv32_xcheri_misc srcAddr srcData srcScr imm otherDst
         )
 
     memOpCount <- choose (1, 3)
@@ -414,7 +414,7 @@ randomizeCapRegAddrs = random $ do
         , cspecialrw 0 29 1
         ]
 
-      -- x2âx14:
+      -- x2-x14:
       -- odd registers derive from MTCC; even registers derive from MTDC.
       makeSequence (reg, value) =
         let scr =

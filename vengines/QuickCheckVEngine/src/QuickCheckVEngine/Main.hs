@@ -310,6 +310,7 @@ allTests = [
            , ("all",        "All Verification",                                       const True,                               genAll)
            , ("random",     "Random Template",                                        const True,                               randomTest)
            , ("rv32mem",    "RV32 Random Load/Store Template",                        andPs [has_xlen_32, has_m, has_a, not . has_cheri], randomLoadStoreTest)
+           , ("caprevoke",   "Xcheri Extension Capability revoke Verification",    has_cheri,                                randomCHERIRevokeTest)
            ]
   where andPs = foldl (\k p x -> p x && k x) (const True)
 
