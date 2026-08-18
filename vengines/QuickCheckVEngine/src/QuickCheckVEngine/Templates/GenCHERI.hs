@@ -57,6 +57,42 @@ import Data.Bits
 cLoadTagsTest :: Template
 cLoadTagsTest = loadTags 1 2
 
+-- | Generate a CSR access from the CHERIoT test allow-list.
+-- Writable CSRs may use any Zicsr instruction, while read-only CSRs are
+-- accessed only with the csrr pseudo-instruction (csrrs with rs1 = x0).
+legalCSRRW :: Template
+legalCSRRW = random $ do
+  rd <- dest
+  rs1 <- src
+  uimm <- bits 5
+  (csrAddr, readOnly) <- frequency
+--    [ (1, return (0x300, False)) -- mstatus
+    [ (1, return (0x300, True)) -- mstatus
+    , (1, return (0x304, True))  -- mie
+--    , (1, return (0x305, True))  -- mtvec: write MTCC with CSpecialRW instead
+    , (1, return (0x340, False)) -- mscratch
+--    , (1, return (0x341, True))  -- mepc: write MEPCC with CSpecialRW instead
+--    , (1, return (0x344, True))  -- mip
+    , (1, return (0xBC1, False)) -- mshwm
+    , (1, return (0xBC2, False)) -- mshwmb
+    -- Give the entire unimplemented machine read/write CSR range the same
+    -- aggregate selection weight as mscratch.  0xBC2 is excluded because it
+    -- is implemented as mshwmb in the current CHERIoT Sail model.
+    , (1, do csr <- choose (0xBC5, 0xBFF)
+             return (csr, False))
+    ]
+
+  if readOnly
+    then return $ csrr rd csrAddr
+    else elements
+      [ inst $ csrrw  rd csrAddr rs1
+      , inst $ csrrs  rd csrAddr rs1
+      , inst $ csrrc  rd csrAddr rs1
+      , inst $ csrrwi rd csrAddr uimm
+      , inst $ csrrsi rd csrAddr uimm
+      , inst $ csrrci rd csrAddr uimm
+      ]
+
 capDecodeTest :: Template
 capDecodeTest = random $ do
   let bitAppend x (a,b) = (shift x b +) <$> a b
@@ -104,20 +140,10 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
   longImm   <- (bits 20)
   fenceOp1  <- (bits 4)
   fenceOp2  <- (bits 4)
-  csrAddr   <- frequency [ -- (1, return (unsafe_csrs_indexFromName "mccsr")) -- CHERIoT lacks capability CSRs
-                           (1, return (unsafe_csrs_indexFromName "mcause")) ]
   -- srcScr    <- elements $ [0, 1, 28, 29, 30, 31] ++ (if has_s arch then [12, 13, 14, 15] else []) ++ [2]
   -- srcScr    <- elements [28, 29, 30, 31] -- CHERIoT has limited cspecialrw targets
   srcScr    <- elements [30]
   -- kliu: 29 (mtdc)) reserved for mememory acceses, 28 (mtcc) and 31 (mepcc) reserved for trap handling/resume
-  -- let allowedCsrs = filter (csrFilter param) [ unsafe_csrs_indexFromName "sepc" -- CHERIoT lacks supervisor mode
-  --                                            , unsafe_csrs_indexFromName "mepc" ] -- CHERIoT lacks mepc, uses mepcc instead
-  let allowedCsrsRO = [ -- unsafe_csrs_indexFromName "scause" -- CHERIoT lacks supervisor mode
-  --                      unsafe_csrs_indexFromName "mcause" ]
-                        unsafe_csrs_indexFromName "mstatus",
-                        unsafe_csrs_indexFromName "mie" ]
-  -- srcCsr    <- if null allowedCsrs then return Nothing else Just <$> elements allowedCsrs -- CHERIoT has no allowedCsrs left
-  srcCsrRO  <- elements allowedCsrsRO
 
   -- mret causes test to stuck-in-loo
   let rv32iWithoutMret =
@@ -134,7 +160,7 @@ genRandomCHERITest baseOffset = readParams $ \param -> random $ do
                 , (10, gen_rv_c)
                 , (20, instUniform $ rv32_m srcAddr srcData dest)
                 , (10, inst $ cspecialrw dest srcScr srcAddr)
-                , (5, csrr dest srcCsrRO)
+                , (5, legalCSRRW)
                 , (5, cspecialRWChain)
                 , (10, makeShortCap)
                 -- , (5, clearASR tmpReg tmpReg2)
@@ -208,13 +234,6 @@ genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
 
     srcScr <- elements [30]
 
-    let allowedCsrsRO =
-          [ unsafe_csrs_indexFromName "mstatus"
-          , unsafe_csrs_indexFromName "mie"
-          ]
-
-    srcCsrRO <- elements allowedCsrsRO
-
     let rv32iNoControl =
              rv32_i_arith srcAddr srcData dest imm longImm
           ++ [auipc dest longImm]
@@ -228,7 +247,7 @@ genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
            ++ rv32_xcheri_misc srcAddr srcData srcScr imm dest)
       , (20, instUniform $ rv32_m srcAddr srcData dest)
       , (10, inst $ cspecialrw dest srcScr srcAddr)
-      , (5,  csrr dest srcCsrRO)
+      , (5,  legalCSRRW)
       , (10, makeShortCap)
       , (5,  inst $ cgettag dest dest)
       , (if has_nocloadtags arch then 0 else 10,
@@ -238,13 +257,12 @@ genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
 -- | Generate a short sequence that stores and reloads a bounded capability
 -- while allowing only CHERI arithmetic instructions to modify the memory
 -- capability used as the load/store base.
-legalCapRevoke :: Integer -> Integer -> Template
-legalCapRevoke baseOffset shadowBase = random $ do
+legalCapRevoke :: Integer -> Template
+legalCapRevoke baseOffset = random $ do
   capReg <- suchThat src (/= 0)
   dataReg <- suchThat src (\reg -> reg /= 0 && reg /= capReg)
   tmpReg <- suchThat src
     (\reg -> reg /= 0 && reg /= capReg && reg /= dataReg)
-  dataOffset <- choose (-128, 127)
 
   middleCount <- choose (0, 2)
   middle <- vectorOf middleCount $ do
@@ -285,10 +303,9 @@ legalCapRevoke baseOffset shadowBase = random $ do
 
   let genDataReg = mconcat
         [ inst $ cspecialrw dataReg 29 0
-        , li32 tmpReg shadowBase
+        , li32 tmpReg baseOffset
         , instSeq
             [ csetaddr dataReg dataReg tmpReg
-            , cincaddrimm dataReg dataReg dataOffset
             , csetboundsimmediate dataReg dataReg 256
             ]
         ]
@@ -303,13 +320,13 @@ legalCapRevoke baseOffset shadowBase = random $ do
 -- | Randomize four words around the revocation-bitmap word corresponding to
 -- the supplied data-memory address.
 randomizeShadowMem :: Integer -> Template
-randomizeShadowMem shadowBase = random $ do
+randomizeShadowMem baseOffset = random $ do
   addrReg <- suchThat src (/= 0)
   dataReg <- suchThat src (\reg -> reg /= 0 && reg /= addrReg)
   values <- vectorOf 4 (bits 32)
 
   let revokeBase =
-        ((shadowBase - 0x80000000) `shiftR` 6) + 0x83000000
+        ((baseOffset - 0x80000000) `shiftR` 6) + 0x83000000
       writeWord (offset, value) =
         li32 dataReg value <> inst (sw addrReg dataReg offset)
 
@@ -322,8 +339,8 @@ randomizeShadowMem shadowBase = random $ do
 
 -- | Instruction mix for revocation testing.  Control-flow instructions and
 -- unrelated capability helpers are intentionally excluded.
-genCHERIRevokeTest :: Integer -> Integer -> Template
-genCHERIRevokeTest baseOffset shadowBase = random $ do
+genCHERIRevokeTest :: Integer -> Template
+genCHERIRevokeTest baseOffset = random $ do
   srcAddr <- src
   srcData <- src
   dest <- dest
@@ -343,7 +360,7 @@ genCHERIRevokeTest baseOffset shadowBase = random $ do
         ++ [auipc dest longImm]
 
   return $ dist
-    [ (30, legalCapRevoke baseOffset shadowBase)
+    [ (30, legalCapRevoke baseOffset)
     , (20, instUniform rv32iNoControl)
     , (10, instUniform $
             rv32_xcheri_inspection srcAddr dest
@@ -359,12 +376,11 @@ genCHERIRevokeTest baseOffset shadowBase = random $ do
 randomCHERIRevokeTest :: Template
 randomCHERIRevokeTest =
   fp_prologue $ random $ do
-    baseOffset <- (* 4) <$> choose (0, 255)
-    shadowBase <- (0x80000000 +) . (* 0x100) <$> choose (0x20, 0x380)
+    baseOffset <- (0x80000000 +) . (* 4) <$> choose (0, 255)
     return $ mconcat
       [ randomizeCapRegAddrs
-      , randomizeShadowMem shadowBase
-      , repeatTillEnd $ genCHERIRevokeTest baseOffset shadowBase
+      , randomizeShadowMem baseOffset
+      , repeatTillEnd $ genCHERIRevokeTest baseOffset
       ]
 
 randomCHERIRVCTest :: Template

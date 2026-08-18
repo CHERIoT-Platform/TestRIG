@@ -45,7 +45,7 @@ SUPPORTED_CSR_ADDRESSES = frozenset({
     0x342,
     0x343,
     0x344,
-})
+}) | frozenset(range(0xBC5, 0xC00))
 
 COMPARE_FIELDS = [
     "packet_num",
@@ -291,6 +291,11 @@ def is_memory_load_store(insn):
     return quadrant in (0b00, 0b10) and funct3 in (0b010, 0b110)
 
 
+def is_amo(insn):
+    """Return True for a 32-bit RISC-V atomic-memory instruction."""
+    return insn is not None and (insn & 0x7f) == 0x2f
+
+
 def relaxed_compare_reason(
     left_packet,
     right_packet,
@@ -319,6 +324,9 @@ def relaxed_compare_reason(
             return "CSR address 0x{:03x} is outside the supported CSR ranges".format(
                 csr_addr
             )
+
+    if sail_mode == "cheriot" and same_instruction and is_amo(left_packet.insn):
+        return "CHERIoT AMO instruction (opcode 0x2f)"
 
     if (
         sail_mode == "rv32"
@@ -686,14 +694,22 @@ def check_results(
             raise SystemExit(1)
 
     print("")
+    fully_passed_count = len(rvfi_files) - len(conditional_passes)
     if conditional_passes:
         print(
-            "Conditional PASS: {} test case(s) matched an RVFI ignore rule: {}".format(
-                len(conditional_passes), ", ".join(conditional_passes)
+            "Conditional PASS: {} test case(s) fully matched, "
+            "{} test case(s) matched an RVFI ignore rule: {}".format(
+                fully_passed_count,
+                len(conditional_passes),
+                ", ".join(conditional_passes),
             )
         )
     else:
-        print("PASS: all RVFI comparisons matched. Happy! :)")
+        print(
+            "PASS: {} test case(s) fully matched. Happy! :)".format(
+                fully_passed_count
+            )
+        )
 
 
 def main():
