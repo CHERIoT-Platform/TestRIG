@@ -246,6 +246,7 @@ genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
            ++ rv32_xcheri_arithmetic srcAddr srcData imm dest
            ++ rv32_xcheri_misc srcAddr srcData srcScr imm dest)
       , (20, instUniform $ rv32_m srcAddr srcData dest)
+      , (10, gen_rv_c)
       , (10, inst $ cspecialrw dest srcScr srcAddr)
       , (5,  legalCSRRW)
       , (10, makeShortCap)
@@ -258,11 +259,12 @@ genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
 -- while allowing only CHERI arithmetic instructions to modify the memory
 -- capability used as the load/store base.
 legalCapRevoke :: Integer -> Template
-legalCapRevoke baseOffset = random $ do
+legalCapRevoke dataCapBase = random $ do
   capReg <- suchThat src (/= 0)
   dataReg <- suchThat src (\reg -> reg /= 0 && reg /= capReg)
   tmpReg <- suchThat src
     (\reg -> reg /= 0 && reg /= capReg && reg /= dataReg)
+  dataCapOffset <- choose (-128, 127)
 
   middleCount <- choose (0, 2)
   middle <- vectorOf middleCount $ do
@@ -277,22 +279,22 @@ legalCapRevoke baseOffset = random $ do
     elements
       (  rv32_i_arith srcAddr srcData otherDst imm longImm
       ++ rv32_xcheri_inspection srcAddr otherDst
-      ++ rv32_xcheri_arithmetic srcAddr srcData imm capReg
+      ++ rv32_xcheri_arithmetic srcAddr srcData imm otherDst
       ++ rv32_xcheri_misc srcAddr srcData srcScr imm otherDst
       )
 
   memOpCount <- choose (1, 3)
   memOps <- vectorOf memOpCount $ do
-    offset <- choose (-16, 15)
+    offset <- choose (-32, 31)
     rd <- dest
 
-    clcMask <- frequency
-      [ (9, return 0x7f8)  -- 8-byte aligned
-      , (1, return 0x7fc)  -- 4-byte aligned
+    clcAlignment <- frequency
+      [ (9, return 8)
+      , (1, return 4)
       ]
 
-    let normalOffset = baseOffset + offset
-        clcOffset = normalOffset Data.Bits..&. clcMask
+    let normalOffset = offset
+        clcOffset = normalOffset - (normalOffset `mod` clcAlignment)
 
     elements
       [ lw  rd capReg normalOffset
@@ -303,7 +305,7 @@ legalCapRevoke baseOffset = random $ do
 
   let genDataReg = mconcat
         [ inst $ cspecialrw dataReg 29 0
-        , li32 tmpReg baseOffset
+        , li32 tmpReg (dataCapBase + dataCapOffset)
         , instSeq
             [ csetaddr dataReg dataReg tmpReg
             , csetboundsimmediate dataReg dataReg 256
@@ -318,15 +320,15 @@ legalCapRevoke baseOffset = random $ do
     ]
 
 -- | Randomize four words around the revocation-bitmap word corresponding to
--- the supplied data-memory address.
+-- the supplied data-capability base.
 randomizeShadowMem :: Integer -> Template
-randomizeShadowMem baseOffset = random $ do
+randomizeShadowMem shadowCapBase = random $ do
   addrReg <- suchThat src (/= 0)
   dataReg <- suchThat src (\reg -> reg /= 0 && reg /= addrReg)
   values <- vectorOf 4 (bits 32)
 
   let revokeBase =
-        ((baseOffset - 0x80000000) `shiftR` 6) + 0x83000000
+        ((shadowCapBase - 0x80000000) `shiftR` 6) + 0x83000000
       writeWord (offset, value) =
         li32 dataReg value <> inst (sw addrReg dataReg offset)
 
@@ -340,7 +342,7 @@ randomizeShadowMem baseOffset = random $ do
 -- | Instruction mix for revocation testing.  Control-flow instructions and
 -- unrelated capability helpers are intentionally excluded.
 genCHERIRevokeTest :: Integer -> Template
-genCHERIRevokeTest baseOffset = random $ do
+genCHERIRevokeTest dataCapBase = random $ do
   srcAddr <- src
   srcData <- src
   dest <- dest
@@ -360,7 +362,7 @@ genCHERIRevokeTest baseOffset = random $ do
         ++ [auipc dest longImm]
 
   return $ dist
-    [ (30, legalCapRevoke baseOffset)
+    [ (30, legalCapRevoke dataCapBase)
     , (20, instUniform rv32iNoControl)
     , (10, instUniform $
             rv32_xcheri_inspection srcAddr dest
@@ -371,16 +373,16 @@ genCHERIRevokeTest baseOffset = random $ do
     , (1, randomizeCapRegAddrs)
     ]
 
--- | Random CHERIoT revocation test with one test-wide data-memory address and
+-- | Random CHERIoT revocation test with one test-wide data-capability base and
 -- a randomized neighborhood in the corresponding revocation bitmap.
 randomCHERIRevokeTest :: Template
 randomCHERIRevokeTest =
   fp_prologue $ random $ do
-    baseOffset <- (0x80000000 +) . (* 4) <$> choose (0, 255)
+    shadowCapBase <- (0x80030000 +) . (* 4) <$> choose (0, 255)
     return $ mconcat
       [ randomizeCapRegAddrs
-      , randomizeShadowMem baseOffset
-      , repeatTillEnd $ genCHERIRevokeTest baseOffset
+      , randomizeShadowMem shadowCapBase
+      , repeatTillEnd $ genCHERIRevokeTest shadowCapBase
       ]
 
 randomCHERIRVCTest :: Template
