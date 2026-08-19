@@ -483,6 +483,13 @@ def run_testrig(
     if test_name is not None:
         command_args.extend(["--test", test_name])
     command = " ".join(shlex.quote(arg) for arg in command_args)
+    command += (
+        "; run_status=$?; "
+        "find ./two_phase_output -type d -exec chmod a+rwx {} +; "
+        "chmod_status=$?; "
+        "if [ $run_status -ne 0 ]; then exit $run_status; fi; "
+        "exit $chmod_status"
+    )
 
     run_cmd(
         [
@@ -519,15 +526,36 @@ def prepare_ref_trace(root):
     print("Copied {} file(s) from {} to {}".format(copied, src, ref_dir))
     return ref_dir
 
-def convert_elfs_to_dii(root, sim_bin):
+def convert_elfs_to_dii(root):
     elf2dii = root / "utils" / "scripts" / "elf2dii_batch.py"
+    elf_list = root / "two_phase_output" / "elfs" / "elfs_no_conflict.list"
     require_file(elf2dii, "elf2dii_batch.py")
 
-    print("Generating  .dii files from .elf ...", flush=True)
-    clean_dir(sim_bin)
+    print("Checking ELF files for instruction-memory conflicts ...", flush=True)
     run_cmd([str(elf2dii)], cwd=root, quiet=False)
 
-    dii_files = sorted(sim_bin.glob("*.dii"));
+    require_file(elf_list, "conflict-free ELF list")
+    dii_files = []
+    with elf_list.open("r", encoding="utf-8") as list_file:
+        for line_number, line in enumerate(list_file, 1):
+            entry = line.strip()
+            if not entry or entry.startswith("#"):
+                continue
+
+            elf_path = Path(entry)
+            if not elf_path.is_absolute():
+                elf_path = root / elf_path
+            if not elf_path.is_file():
+                raise FileNotFoundError(
+                    "ELF listed at {}:{} not found: {}".format(
+                        elf_list, line_number, elf_path
+                    )
+                )
+            dii_files.append(elf_path)
+
+    if not dii_files:
+        raise RuntimeError("No conflict-free ELF files listed in {}".format(elf_list))
+
     return dii_files
 
 
@@ -847,7 +875,7 @@ def main():
         # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)
         ref_dir = root / "two_phase_output" / "results"
-        dii_files = convert_elfs_to_dii(root, sim_bin)
+        dii_files = convert_elfs_to_dii(root)
 
         results_dir = run_simulations(root, dii_files, args.phase2_instr_count)
 

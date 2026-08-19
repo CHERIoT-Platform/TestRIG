@@ -12,9 +12,10 @@ Default behavior:
        - ELF-loaded memory bytes
        - instruction bytes executed in the Sail RVFI trace, derived from pc_rdata/insn
      A memory write is any packet with mem_wmask != 0.
-  4. If conflict is found, print an error and do not generate that .dii file.
-  5. Otherwise write:
-       ./riscv-implementations/cheriot-kudu/sim/verilator/bin/trace_NNN.dii
+  4. Write each conflict-free ELF path to:
+       ./two_phase_output/elfs/elfs_no_conflict.list
+  5. If --gen_dii_files is specified, also write:
+       ./two_phase_output/elfs/trace_NNN.dii
 
 The DII output format matches elf2dii.py:
   mem[X,0xADDR] -> 0xWORD
@@ -367,8 +368,14 @@ def parse_args():
 
     parser.add_argument(
         "--out-dir",
-        default="riscv-implementations/cheriot-kudu/sim/verilator/bin",
-        help="Output directory relative to root. Default: Kudu verilator bin dir.",
+        default="two_phase_output/elfs",
+        help="DII output directory relative to root. Default: two_phase_output/elfs.",
+    )
+
+    parser.add_argument(
+        "--gen_dii_files",
+        action="store_true",
+        help="Generate .dii files. Default: only check conflicts and write the ELF list.",
     )
 
     parser.add_argument(
@@ -392,7 +399,7 @@ def parse_args():
     parser.add_argument(
         "--clean-out",
         action="store_true",
-        help="Delete existing trace*.dii files in output directory before running.",
+        help="With --gen_dii_files, delete existing trace*.dii files before running.",
     )
 
     return parser.parse_args()
@@ -404,22 +411,29 @@ def main():
     root = Path(args.root).resolve()
     elf_pattern = str(root / args.elf_glob)
     out_dir = root / args.out_dir
+    list_path = root / "two_phase_output" / "elfs" / "elfs_no_conflict.list"
     rvfi_dir = Path(args.rvfi_dir).resolve() if args.rvfi_dir is not None else None
     use_paddr = not args.vaddr
     include_bss = not args.no_bss
+
+    list_path.parent.mkdir(parents=True, exist_ok=True)
+    list_path.unlink(missing_ok=True)
+    list_path.write_text("", encoding="utf-8")
 
     elf_files = sorted(Path(p) for p in glob.glob(elf_pattern))
     if not elf_files:
         print("ERROR: no ELF files found: {}".format(elf_pattern), file=sys.stderr)
         return 1
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if args.gen_dii_files:
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.clean_out:
+    if args.gen_dii_files and args.clean_out:
         for old in out_dir.glob("trace*.dii"):
             old.unlink()
 
     generated = 0
+    no_conflict_elfs = []
     skipped = 0
     failed = 0
 
@@ -451,20 +465,27 @@ def main():
             if conflict is not None:
                 print("  WARNING: RVFI memory write overlaps ELF-loaded memory")
                 print("  WARNING: {}".format(format_conflict(conflict)))
-                print("  SKIP: not generating {}".format(out_path))
+                print("  SKIP: excluding {} from conflict-free list".format(elf_path))
                 skipped += 1
                 continue
 
-            elf_to_mem16(
-                elf_path,
-                out_path,
-                x_name=args.x,
-                use_paddr=use_paddr,
-                include_bss=include_bss,
-            )
+            try:
+                list_entry = elf_path.resolve().relative_to(root).as_posix()
+            except ValueError:
+                list_entry = str(elf_path.resolve())
+            no_conflict_elfs.append(list_entry)
 
-            #print("  OK: generated {}".format(out_path))
-            generated += 1
+            if args.gen_dii_files:
+                elf_to_mem16(
+                    elf_path,
+                    out_path,
+                    x_name=args.x,
+                    use_paddr=use_paddr,
+                    include_bss=include_bss,
+                )
+                generated += 1
+
+                #print("  OK: generated {}".format(out_path))
 
         except Exception as e:
             print("  ERROR: failed processing {}: {}".format(trace_name, e), file=sys.stderr)
@@ -472,10 +493,17 @@ def main():
             failed += 1
             continue
 
+    with list_path.open("w", encoding="utf-8") as list_file:
+        for elf_path in no_conflict_elfs:
+            list_file.write("{}\n".format(elf_path))
+
     print("")
     print("Summary:")
     print("  ELF files : {}".format(len(elf_files)))
-    print("  generated : {}".format(generated))
+    print("  no conflict: {}".format(len(no_conflict_elfs)))
+    print("  list file : {}".format(list_path))
+    if args.gen_dii_files:
+        print("  generated : {}".format(generated))
     print("  skipped   : {}".format(skipped))
 
     return 1 if failed else 0
