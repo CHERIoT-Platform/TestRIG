@@ -217,6 +217,7 @@ ok "generated ${N_ELFS} ELF(s)"
 # ELF.  ELFs without the marker section simply do not get an .addata file.
 log "Generate Phase-2 additional-data files"
 python3 "${SCRIPTS}/gen_addata.py" --elf-dir "${ELF_DIR}"
+#python3 "${SCRIPTS}/gen_addata.py" --embed_addata --elf-dir "${ELF_DIR}"
 N_ADDATA=$(find "${ELF_DIR}" -maxdepth 1 -name '*.addata' | wc -l | tr -d ' ')
 ok "generated ${N_ADDATA} additional-data file(s)"
 

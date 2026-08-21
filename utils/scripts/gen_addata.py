@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate Phase-2 .addata files from Phase-1 ELF metadata."""
+"""Generate Phase-2 additional data from Phase-1 ELF metadata."""
 
 import argparse
 import random
@@ -11,6 +11,8 @@ from elftools.elf.elffile import ELFFile
 
 
 ADDATA_SECTION = ".addata_info"
+ADDATA_MAIN_SECTION = ".addata_main"
+ADDATA_TAGS_SECTION = ".addata_tags"
 # IT8 decodes nonzero cE with XOR 0x1f; encoded values for exponents
 # 0x19 through 0x1e are therefore forbidden.
 FORBIDDEN_TAGGED_CE = frozenset(
@@ -72,22 +74,69 @@ def random_addata_value():
     return (tag << 64) | data
 
 
+def encode_addata_main(values):
+    """Encode the 64-bit data portion of each entry as little endian."""
+    return b"".join(
+        (value & 0xffffffffffffffff).to_bytes(8, byteorder="little")
+        for value in values
+    )
+
+
+def encode_addata_tags(values):
+    """Encode each out-of-band tag as one byte containing zero or one."""
+    return bytes((value >> 64) & 1 for value in values)
+
+
+def embed_addata(elf_path, values):
+    """Add or replace the non-loadable data and tag ELF sections."""
+    try:
+        import lief
+    except ImportError as error:
+        raise RuntimeError(
+            "LIEF is required to embed additional data; install it with "
+            "'python3 -m pip install lief'"
+        ) from error
+
+    elf = lief.parse(str(elf_path))
+    if elf is None:
+        raise ValueError("cannot parse ELF file {}".format(elf_path))
+
+    for section_name in (ADDATA_MAIN_SECTION, ADDATA_TAGS_SECTION):
+        old_section = elf.get_section(section_name)
+        if old_section is not None:
+            elf.remove(old_section)
+
+    section = lief.ELF.Section(ADDATA_MAIN_SECTION)
+    section.content = list(encode_addata_main(values))
+    if elf.add(section, loaded=False) is None:
+        raise RuntimeError("cannot add {} to {}".format(
+            ADDATA_MAIN_SECTION, elf_path))
+
+    section = lief.ELF.Section(ADDATA_TAGS_SECTION)
+    section.content = list(encode_addata_tags(values))
+    if elf.add(section, loaded=False) is None:
+        raise RuntimeError("cannot add {} to {}".format(
+            ADDATA_TAGS_SECTION, elf_path))
+
+    temporary = elf_path.with_name(elf_path.name + ".tmp")
+    try:
+        elf.write(str(temporary))
+        temporary.replace(elf_path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def generate_addata(elf_path):
-    """Generate or remove the sibling .addata file for one ELF."""
+    """Generate and embed additional data for one ELF."""
     info = read_addata_info(elf_path)
-    out_path = elf_path.with_suffix(".addata")
+    # Remove sidecar files left by the former flow.
+    elf_path.with_suffix(".addata").unlink(missing_ok=True)
     if info is None:
-        out_path.unlink(missing_ok=True)
         return False
 
-    offset, size = info
-    with out_path.open("w", encoding="ascii") as output:
-        for index in range(size):
-            output.write(
-                "0x{:08x}:0x{:017x}\n".format(
-                    offset + index * 8, random_addata_value()
-                )
-            )
+    _offset, size = info
+    values = [random_addata_value() for _ in range(size)]
+    embed_addata(elf_path, values)
     return True
 
 
@@ -117,7 +166,7 @@ def main():
         print("ERROR: {}".format(error), file=sys.stderr)
         return 1
 
-    print("Generated {} .addata file(s) from {} ELF(s).".format(
+    print("Embedded additional data in {} of {} ELF(s).".format(
         generated, len(elf_files)))
     return 0
 

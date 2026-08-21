@@ -119,7 +119,8 @@ LABEL description="CHERIoT TestRIG — two-phase execution (runtime)"
 ENV DEBIAN_FRONTEND=noninteractive TZ=UTC
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgmp10 libstdc++6 python3 python3-pyelftools bash file \
+        libgmp10 libstdc++6 python3 python3-pip python3-pyelftools bash file \
+    && python3 -m pip install --no-cache-dir lief \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /testrig
