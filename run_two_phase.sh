@@ -213,6 +213,13 @@ python3 "${SCRIPTS}/generate_elfs_from_traces.py" \
 N_ELFS=$(find "${ELF_DIR}" -maxdepth 1 -name '*.elf' | wc -l | tr -d ' ')
 ok "generated ${N_ELFS} ELF(s)"
 
+# Generate optional Phase-2 data overlays from the metadata captured in each
+# ELF.  ELFs without the marker section simply do not get an .addata file.
+log "Generate Phase-2 additional-data files"
+python3 "${SCRIPTS}/gen_addata.py" --elf-dir "${ELF_DIR}"
+N_ADDATA=$(find "${ELF_DIR}" -maxdepth 1 -name '*.addata' | wc -l | tr -d ' ')
+ok "generated ${N_ADDATA} additional-data file(s)"
+
 # Phase 2 — re-execute each ELF in Sail and capture BOTH:
 #   1. The full verbose Sail trace (-v / NULL optarg → all channels:
 #      instr / reg / mem / rvfi / platform / exception).
@@ -265,6 +272,7 @@ phase-2 instr limit:  ${PHASE2_INSTRUCTIONS}
 Phase 1 — generator → Sail (-f) → ELF
   hex traces:         ${N_TRACES}      (${TRACE_DIR}/trace_*.hex.txt)
   ELFs:               ${N_ELFS}        (${ELF_DIR}/trace_*.elf)
+  additional data:    ${N_ADDATA}      (${ELF_DIR}/trace_*.addata)
 
 Phase 2 — ELF re-exec in Sail → log + binary RVFI
   Sail verbose log:   ${N_RVFI}        (${RESULTS_DIR}/trace_*_sail.log)

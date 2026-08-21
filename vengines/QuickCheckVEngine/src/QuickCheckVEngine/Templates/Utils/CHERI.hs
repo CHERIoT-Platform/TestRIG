@@ -160,7 +160,7 @@ legalCHERILoadStore baseOffset =
 
     memOpCount <- choose (1, 3)
     memOps <- vectorOf memOpCount $ do
-      offset <- choose (0x0, 0x7)
+      offset <- choose (0x0, 0x1ff)
       rd     <- dest
       rs2    <- src
 
@@ -392,14 +392,14 @@ randomizeCapRegAddrs :: Template
 randomizeCapRegAddrs = random $ do
   values <- vectorOf 14 (bits 32)
 
-  let loadRandom value =
+  let loadValue reg value =
         let upper20 =
               ((value + 0x800) `shiftR` 12) Data.Bits..&. 0xfffff
             lower12 =
               value Data.Bits..&. 0xfff
         in
-          [ lui  15 upper20
-          , addi 15 15 lower12
+          [ lui  reg upper20
+          , addi reg reg lower12
           ]
 
       x1Value = (head values) Data.Bits..&. 0x00ffff00
@@ -408,10 +408,20 @@ randomizeCapRegAddrs = random $ do
       x1Sequence =
         [ cspecialrw 1 29 0
         ]
-        ++ loadRandom x1Value
+        ++ loadValue 15 x1Value
         ++
         [ csetaddr   1 1 15
         , cspecialrw 0 29 1
+        ]
+        ++ loadValue 2 0xffffff00
+        ++
+        [ csetaddr   1 1 2
+        , cspecialrw 2 29 0
+        , sw         1 2 0
+        ]
+        ++ loadValue 2 0x100
+        ++
+        [ sw         1 2 0
         ]
 
       -- x2-x14:
@@ -424,7 +434,7 @@ randomizeCapRegAddrs = random $ do
         in
           [ cspecialrw reg scr 0
           ]
-          ++ loadRandom value
+          ++ loadValue 15 value
           ++
           [ csetaddr reg reg 15
           ]

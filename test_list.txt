@@ -1,0 +1,13 @@
+./run_sim.sh 100  |egrep "PASS|STOP|building|verilog|run"  # caprandom (default)
+./run_sim.sh 100 --test caparith --case_cnt 10  --phase1_instr_count 20000  |egrep "PASS|STOP|building|verilog|run"
+./run_sim.sh 100 --test caprevoke --case_cnt 10 --phase1_instr_count 10000 |egrep "PASS|STOP|building|verilog|run"
+./run_sim.sh 100 -rv32 --test rv32mem --case_cnt 10  --phase1_instr_count 10000  |egrep "PASS|STOP|building|verilog|run"
+
+#random: rv32 random test, address wraparound issue.
+./run_sim.sh 100 -rv32 --test random  |egrep "PASS|STOP|building|verilog|run"
+
+utils/scripts/run_cheriot_kudu_rvfi.py --case_cnt 1 --phase1_instr_count 1000
+utils/scripts/run_cheriot_kudu_rvfi.py --sail-mode rv32 --test rv32mem --case_cnt 1 --phase1_instr_count 2000
+
+utils/scripts/run_cheriot_kudu_rvfi.py --skip-sail --skip-sim
+

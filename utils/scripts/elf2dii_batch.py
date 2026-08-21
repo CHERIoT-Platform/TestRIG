@@ -4,7 +4,7 @@ Batch ELF-to-DII converter with Sail RVFI memory-write conflict checking.
 
 Default behavior:
   1. Iterate over ./two_phase_output/elfs/trace*.elf
-  2. For each trace_NNN.elf, find the corresponding Sail RVFI trace:
+  2. For each trace_NNN.elf, find the corresponding Phase-2 Sail RVFI trace:
        ./two_phase_output/results/trace_NNN_phase2.rvfi
      with fallback:
        ./two_phase_output/trace_NNN_phase2.rvfi
@@ -35,8 +35,6 @@ RVFI_FIELD_RE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*:\s*(.*)$")
 HEX_RE = re.compile(r"0x([0-9a-fA-F_]+)")
 BIN_RE = re.compile(r"0b([01_]+)")
 DEC_RE = re.compile(r"\b([0-9]+)\b")
-
-
 def parse_int(text):
     """Parse the first integer from a string."""
     if text is None:
@@ -416,14 +414,14 @@ def main():
     use_paddr = not args.vaddr
     include_bss = not args.no_bss
 
-    list_path.parent.mkdir(parents=True, exist_ok=True)
-    list_path.unlink(missing_ok=True)
-    list_path.write_text("", encoding="utf-8")
-
     elf_files = sorted(Path(p) for p in glob.glob(elf_pattern))
     if not elf_files:
         print("ERROR: no ELF files found: {}".format(elf_pattern), file=sys.stderr)
         return 1
+
+    list_path.parent.mkdir(parents=True, exist_ok=True)
+    list_path.unlink(missing_ok=True)
+    list_path.write_text("", encoding="utf-8")
 
     if args.gen_dii_files:
         out_dir.mkdir(parents=True, exist_ok=True)

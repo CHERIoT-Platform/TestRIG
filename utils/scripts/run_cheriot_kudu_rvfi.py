@@ -590,7 +590,7 @@ def run_simulations(root, dii_files, rvfi_max):
             if stale.exists():
                 stale.unlink()
 
-        run_cmd([
+        sim_command = [
             str(sim_exe),
             "+TEST={}".format(test_name),
             "+RVFI_MAX={}".format(rvfi_max),
@@ -598,7 +598,12 @@ def run_simulations(root, dii_files, rvfi_max):
             "+INSTR_RESP_WMAX={}".format(instr_resp_wmax),
             "+DATA_GNT_WMAX={}".format(data_gnt_wmax),
             "+DATA_RESP_WMAX={}".format(data_resp_wmax),
-        ],
+        ]
+        addata_path = dii.with_suffix(".addata")
+        if addata_path.is_file():
+            sim_command.append("+ADDATA=1")
+
+        run_cmd(sim_command,
             cwd=verilator_dir,
             quiet=True,
         )

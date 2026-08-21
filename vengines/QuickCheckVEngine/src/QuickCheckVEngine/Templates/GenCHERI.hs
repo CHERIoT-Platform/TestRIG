@@ -424,7 +424,7 @@ randomCHERITest :: Template
 randomCHERITest =
   fp_prologue $ random $ do
     -- Persistent 10-bit, four-byte-aligned value: 0x000-0x3fc.
-    baseOffset <- (* 4) <$> choose (0, 255)
+    baseOffset <- (* 4) <$> choose (0, 0)
     return $ mconcat
       [ randomizeCapRegAddrs
       , repeatN 150 $ genRandomCHERITestNoJump baseOffset

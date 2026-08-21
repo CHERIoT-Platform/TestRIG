@@ -38,7 +38,7 @@ def parse_args():
     return p.parse_args()
 
 
-def run_one(elf, out_log, sail, inst_limit, rvfi_bin=None):
+def run_one(elf, out_log, sail, inst_limit, rvfi_bin=None, addata=None):
     """Re-execute one ELF and capture trace channels + (optionally) RVFI.
 
     Bare ``-v`` (``--trace`` with no value) hits ``set_config_print``'s
@@ -50,6 +50,8 @@ def run_one(elf, out_log, sail, inst_limit, rvfi_bin=None):
     """
     cmd = [sail, elf, '-v', '--trace-output', out_log,
            '-l', str(inst_limit)]
+    if addata is not None:
+        cmd += ['--addata', addata]
     if rvfi_bin is not None:
         cmd += ['--rvfi-output', rvfi_bin]
     try:
@@ -97,8 +99,11 @@ def main():
         out = op.join(args.output_dir, f'{stem}_sail.log')
         rvfi_bin = (op.join(args.rvfi_bin_dir, f'{stem}_phase2.rvfi.bin')
                     if args.rvfi_bin_dir else None)
+        candidate_addata = op.splitext(elf)[0] + '.addata'
+        addata = candidate_addata if op.isfile(candidate_addata) else None
         success, err = run_one(elf, out, args.sail_path,
-                               args.inst_limit, rvfi_bin=rvfi_bin)
+                               args.inst_limit, rvfi_bin=rvfi_bin,
+                               addata=addata)
         if success:
             ok += 1
             if args.verbose or i % 10 == 0 or i == len(elfs):
