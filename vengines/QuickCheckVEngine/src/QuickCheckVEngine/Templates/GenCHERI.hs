@@ -255,6 +255,65 @@ genRandomCHERITestNoJump baseOffset = readParams $ \param -> random $ do
            loadTags srcAddr srcData)
       ]
 
+legalCHERILoadStore :: Integer -> Template
+legalCHERILoadStore baseOffset =
+  readParams $ \param -> random $ do
+    let arch = archDesc param
+
+    capReg  <- suchThat src (/= 0)
+    dataReg <- suchThat dest (\reg -> reg /= 0 && reg /= capReg)
+    count   <- choose (0, 2)
+
+    middle <- vectorOf count $ do
+      srcAddr <- src
+      srcData <- src
+      srcScr  <- elements [30]
+      imm     <- bits 12
+      longImm <- bits 20
+      otherDst <- suchThat dest (/= capReg)
+      -- "middle" part of the sequence, exclude jump/branches for now
+      elements
+        (  rv32_i_arith srcAddr srcData otherDst imm longImm
+        ++ rv32_xcheri_inspection srcAddr otherDst
+        ++ rv32_xcheri_arithmetic srcAddr srcData imm capReg
+        ++ rv32_xcheri_misc srcAddr srcData srcScr imm otherDst
+        )
+
+    memOpCount <- choose (1, 3)
+    memOps <- vectorOf memOpCount $ do
+      offset <- choose (0x0, 0x7f)
+
+      clcMask <- frequency
+        [ (9, return 0x7f8)  -- 8-byte aligned
+        , (1, return 0x7fc)  -- 4-byte aligned
+        ]
+
+      let normalOffset = baseOffset + offset
+          clcOffset    = normalOffset Data.Bits..&. clcMask
+
+      frequency
+        [ (1, return $ lb  dataReg capReg normalOffset)
+        , (1, return $ lbu dataReg capReg normalOffset)
+        , (1, return $ lh  dataReg capReg normalOffset)
+        , (1, return $ lhu dataReg capReg normalOffset)
+        , (1, return $ lw  dataReg capReg normalOffset)
+        , (4, return $ clc dataReg capReg clcOffset)
+        , (1, return $ sb  capReg dataReg normalOffset)
+        , (1, return $ sh  capReg dataReg normalOffset)
+        , (1, return $ sw  capReg dataReg normalOffset)
+        , (4, return $ csc dataReg capReg clcOffset)
+        ]
+
+    arithCount <- choose (0, 2)
+    arithOps <- vectorOf arithCount $ do
+      srcData  <- src
+      imm      <- bits 12
+      otherDst <- suchThat dest (/= capReg)
+      elements $ rv32_xcheri_arithmetic dataReg srcData imm otherDst
+
+    return $ instSeq $
+      [cspecialrw capReg 29 0] ++ middle ++ memOps ++ arithOps
+
 -- | Generate a short sequence that stores and reloads a bounded capability
 -- while allowing only CHERI arithmetic instructions to modify the memory
 -- capability used as the load/store base.

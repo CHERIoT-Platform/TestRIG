@@ -39,7 +39,6 @@ module QuickCheckVEngine.Templates.Utils.CHERI (
 , makeCap
 , makeCap_core
 , makeShortCap
-, legalCHERILoadStore
 , legalAtomicOps
 -- , loadRegion -- Unused, so not fully updating for CHERIoT
 -- , switchEncodingMode
@@ -135,58 +134,6 @@ makeShortCap = random $ do
                     --  cincoffsetimmediate dst dst (offset Data.Bits..&. 0xfff)] -- CHERIoT replaces cincoffsetimm(ediate) with cincaddrimm
                      cincaddrimm dst dst (offset Data.Bits..&. 0xfff)]            -- CHERIoT replaces cincoffsetimm(ediate) with cincaddrimm
 
-legalCHERILoadStore :: Integer -> Template
-legalCHERILoadStore baseOffset =
-  readParams $ \param -> random $ do
-    let arch = archDesc param
-
-    capReg <- suchThat src (/= 0)
-    count  <- choose (0, 2)
-
-    middle <- vectorOf count $ do
-      srcAddr <- src
-      srcData <- src
-      srcScr  <- elements [30]
-      imm     <- bits 12
-      longImm <- bits 20
-      otherDst <- suchThat dest (/= capReg)
-      -- "middle" part of the sequence, exclude jump/branches for now
-      elements
-        (  rv32_i_arith srcAddr srcData otherDst imm longImm
-        ++ rv32_xcheri_inspection srcAddr otherDst
-        ++ rv32_xcheri_arithmetic srcAddr srcData imm capReg
-        ++ rv32_xcheri_misc srcAddr srcData srcScr imm otherDst
-        )
-
-    memOpCount <- choose (1, 3)
-    memOps <- vectorOf memOpCount $ do
-      offset <- choose (0x0, 0x1ff)
-      rd     <- dest
-      rs2    <- src
-
-      clcMask <- frequency
-        [ (9, return 0x7f8)  -- 8-byte aligned
-        , (1, return 0x7fc)  -- 4-byte aligned
-        ]
-
-      let normalOffset = baseOffset + offset
-          clcOffset    = normalOffset Data.Bits..&. clcMask
-
-      elements
-        [ lb  rd capReg normalOffset
-        , lbu rd capReg normalOffset
-        , lh  rd capReg normalOffset
-        , lhu rd capReg normalOffset
-        , lw  rd capReg normalOffset
-        , clc rd capReg clcOffset
-        , sb  capReg rs2 normalOffset
-        , sh  capReg rs2 normalOffset
-        , sw  capReg rs2 normalOffset
-        , csc rs2 capReg clcOffset
-        ]
-
-    return $ instSeq $
-      [cspecialrw capReg 29 0] ++ middle ++ memOps
 
 -- Generate legal, word-aligned RV32A AMOs through mtdc, using the same
 -- sequence structure as legalCHERILoadStore.  RV32A atomic instructions do
