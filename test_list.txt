@@ -9,5 +9,7 @@
 utils/scripts/run_cheriot_kudu_rvfi.py --case_cnt 1 --phase1_instr_count 1000
 utils/scripts/run_cheriot_kudu_rvfi.py --sail-mode rv32 --test rv32mem --case_cnt 1 --phase1_instr_count 2000
 
-utils/scripts/run_cheriot_kudu_rvfi.py --skip-sail --skip-sim
+utils/scripts/run_cheriot_kudu_rvfi.py --diff_only
+utils/scripts/run_cheriot_kudu_rvfi.py --verilog_only
+utils/scripts/run_cheriot_kudu_rvfi.py --phase2_only
 

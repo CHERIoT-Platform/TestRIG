@@ -16,6 +16,8 @@
 #                           [--clean] [--seed N]
 #                           [--gen auto|qcvengine|python]
 #                           [--test TEST_NAME]
+#                           [--vengine-only|--phase1-only]
+#                           (underscore aliases are also accepted)
 
 set -euo pipefail
 
@@ -26,6 +28,8 @@ ARCHITECTURE="rv32ecZifencei_Xcheriot"
 WORK_DIR="./two_phase_output"
 SEED=""
 CLEAN=0
+VENGINE_ONLY=0
+PHASE1_ONLY=0
 # Instruction-stream generator. "auto" (default) picks the QCVEngine
 # Haskell binary when available and falls back to the Python script
 # otherwise. Force one or the other with --gen qcvengine|python.
@@ -45,7 +49,7 @@ ARCHITECTURE=""
 TEMPLATE=""
 
 usage() {
-  sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -65,6 +69,10 @@ while [[ $# -gt 0 ]]; do
     -s|--seed)          SEED="$2"; shift 2 ;;
     --sail-model) SAIL_MODEL="$2"; shift 2 ;;
     --clean)            CLEAN=1; shift ;;
+    --vengine-only|--vengine_only)
+                         VENGINE_ONLY=1; shift ;;
+    --phase1-only|--phase1_only)
+                         PHASE1_ONLY=1; shift ;;
     --gen)              GEN="$2"; shift 2 ;;
     --template|--test)
       [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
@@ -73,6 +81,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
+
+if [[ ${VENGINE_ONLY} -eq 1 && ${PHASE1_ONLY} -eq 1 ]]; then
+  echo "ERROR: --vengine-only and --phase1-only are mutually exclusive" >&2
+  exit 2
+fi
 
 : "${PHASE2_INSTRUCTIONS:=${INSTRUCTIONS}}"
 
@@ -125,10 +138,12 @@ fi
 mkdir -p "${TRACE_DIR}" "${ELF_DIR}" "${RESULTS_DIR}"
 
 # Prerequisites
-[[ -x "${SAIL}" ]] || die "Sail RVFI binary not found/executable at ${SAIL}
-  Build it: see BUILD_SAIL_MACOS.md (macOS) or riscv-implementations/cheriot-sail/RUNNING.md (Linux)"
 command -v python3 >/dev/null || die "python3 not in PATH"
-ok "Sail binary found"
+if [[ ${VENGINE_ONLY} -eq 0 ]]; then
+  [[ -x "${SAIL}" ]] || die "Sail RVFI binary not found/executable at ${SAIL}
+    Build it: see BUILD_SAIL_MACOS.md (macOS) or riscv-implementations/cheriot-sail/RUNNING.md (Linux)"
+  ok "Sail binary found"
+fi
 
 # Phase 1a — generate random instruction streams.
 # Prefer the QCVEngine binary (authoritative CHERIoT encodings, lives at
@@ -202,6 +217,11 @@ fi
 N_TRACES=$(find "${TRACE_DIR}" -maxdepth 1 -name 'trace_*.hex.txt' | wc -l | tr -d ' ')
 ok "generated ${N_TRACES} trace(s)"
 
+if [[ ${VENGINE_ONLY} -eq 1 ]]; then
+  log "Done — VEngine trace generation only"
+  exit 0
+fi
+
 # Phase 1 — run each hex file through Sail to dump memory to an ELF.
 # We deliberately do NOT ask Sail for Phase-1 RVFI; the deliverable is
 # Phase-2 RVFI from the ELF re-exec path (matches Phase 2 = ELF → RVFI).
@@ -213,13 +233,15 @@ python3 "${SCRIPTS}/generate_elfs_from_traces.py" \
 N_ELFS=$(find "${ELF_DIR}" -maxdepth 1 -name '*.elf' | wc -l | tr -d ' ')
 ok "generated ${N_ELFS} ELF(s)"
 
-# Generate optional Phase-2 data overlays from the metadata captured in each
-# ELF.  ELFs without the marker section simply do not get an .addata file.
-log "Generate Phase-2 additional-data files"
+if [[ ${PHASE1_ONLY} -eq 1 ]]; then
+  log "Done — Phase 1 Sail simulation only"
+  exit 0
+fi
+
+# Embed optional Phase-2 data overlays in ELFs that contain .addata_info.
+log "Embed Phase-2 additional data"
 python3 "${SCRIPTS}/gen_addata.py" --elf-dir "${ELF_DIR}"
-#python3 "${SCRIPTS}/gen_addata.py" --embed_addata --elf-dir "${ELF_DIR}"
-N_ADDATA=$(find "${ELF_DIR}" -maxdepth 1 -name '*.addata' | wc -l | tr -d ' ')
-ok "generated ${N_ADDATA} additional-data file(s)"
+ok "embedded Phase-2 additional data"
 
 # Phase 2 — re-execute each ELF in Sail and capture BOTH:
 #   1. The full verbose Sail trace (-v / NULL optarg → all channels:
@@ -231,7 +253,7 @@ ok "generated ${N_ADDATA} additional-data file(s)"
 PHASE2_RVFI_BIN_DIR="${WORK_DIR}/rvfi_bin_phase2"
 mkdir -p "${PHASE2_RVFI_BIN_DIR}"
 log "Step 3/4  Phase 2 — re-execute ELFs in Sail, capture log + RVFI"
-python3 "${SCRIPTS}/run_two_phase_execution.py" \
+python3 "${SCRIPTS}/run_phase2_sail.py" \
   --elf-dir "${ELF_DIR}" \
   --output-dir "${RESULTS_DIR}" \
   --rvfi-bin-dir "${PHASE2_RVFI_BIN_DIR}" \
@@ -273,7 +295,7 @@ phase-2 instr limit:  ${PHASE2_INSTRUCTIONS}
 Phase 1 — generator → Sail (-f) → ELF
   hex traces:         ${N_TRACES}      (${TRACE_DIR}/trace_*.hex.txt)
   ELFs:               ${N_ELFS}        (${ELF_DIR}/trace_*.elf)
-  additional data:    ${N_ADDATA}      (${ELF_DIR}/trace_*.addata)
+  additional data:    embedded in ELF (.addata_main / .addata_tags)
 
 Phase 2 — ELF re-exec in Sail → log + binary RVFI
   Sail verbose log:   ${N_RVFI}        (${RESULTS_DIR}/trace_*_sail.log)

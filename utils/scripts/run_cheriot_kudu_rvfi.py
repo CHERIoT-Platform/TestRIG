@@ -464,6 +464,7 @@ def run_testrig(
     phase1_instr_count=1000,
     phase2_instr_count=None,
     test_name=None,
+    stop_after=None,
 ):
     if case_cnt is None:
         case_cnt = 100
@@ -482,6 +483,12 @@ def run_testrig(
     ]
     if test_name is not None:
         command_args.extend(["--test", test_name])
+    if stop_after == "vengine":
+        command_args.append("--vengine-only")
+    elif stop_after == "phase1":
+        command_args.append("--phase1-only")
+    elif stop_after is not None:
+        raise ValueError("invalid stop_after value: {}".format(stop_after))
     command = " ".join(shlex.quote(arg) for arg in command_args)
     command += (
         "; run_status=$?; "
@@ -491,6 +498,74 @@ def run_testrig(
         "exit $chmod_status"
     )
 
+    run_cmd(
+        [
+            "docker",
+            "compose",
+            "run",
+            "--rm",
+            "testrig",
+            "bash",
+            "-lc",
+            command,
+        ],
+        cwd=root,
+    )
+
+
+def run_phase2_sail(root, sail_mode, phase2_instr_count):
+    elf_dir = root / "two_phase_output" / "elfs"
+    rvfi_to_text = root / "utils" / "scripts" / "rvfi_to_text.py"
+
+    require_dir(elf_dir, "existing Phase-1 ELF directory")
+    require_file(rvfi_to_text, "rvfi_to_text.py")
+
+    if sail_mode == "rv32":
+        sail_path = (
+            "./riscv-implementations/cheriot-sail/sail-riscv/"
+            "c_emulator/riscv_rvfi_RV32"
+        )
+    else:
+        sail_path = (
+            "./riscv-implementations/cheriot-sail/"
+            "c_emulator/cheri_riscv_rvfi_RV32"
+        )
+
+    command_args = [
+        "python3",
+        "./utils/scripts/run_phase2_sail.py",
+        "--elf-dir", "./two_phase_output/elfs",
+        "--output-dir", "./two_phase_output/results",
+        "--rvfi-bin-dir", "./two_phase_output/rvfi_bin_phase2",
+        "--sail-path", sail_path,
+        "--inst-limit", str(phase2_instr_count),
+        "--skip-ibex",
+    ]
+    command = " ".join(shlex.quote(arg) for arg in command_args)
+    command += (
+        "; run_status=$?; "
+        "decoded=0; "
+        "if [ $run_status -eq 0 ]; then "
+        "for rvfi_bin in "
+        "./two_phase_output/rvfi_bin_phase2/*_phase2.rvfi.bin; do "
+        "[ -e \"$rvfi_bin\" ] || continue; "
+        "base=$(basename \"$rvfi_bin\" .rvfi.bin); "
+        "if python3 ./utils/scripts/rvfi_to_text.py "
+        "--input \"$rvfi_bin\" "
+        "--output \"./two_phase_output/results/${base}.rvfi\" "
+        "--lenient; then "
+        "decoded=$((decoded + 1)); "
+        "else echo \"WARNING: failed to decode $rvfi_bin\" >&2; fi; "
+        "done; "
+        "echo \"Decoded ${decoded} Phase-2 RVFI trace(s).\"; "
+        "fi; "
+        "find ./two_phase_output -type d -exec chmod a+rwx {} +; "
+        "chmod_status=$?; "
+        "if [ $run_status -ne 0 ]; then exit $run_status; fi; "
+        "exit $chmod_status"
+    )
+
+    print("\nRunning Phase-2 Sail simulation with existing ELFs ...", flush=True)
     run_cmd(
         [
             "docker",
@@ -590,7 +665,7 @@ def run_simulations(root, dii_files, rvfi_max):
             if stale.exists():
                 stale.unlink()
 
-        sim_command = [
+        run_cmd([
             str(sim_exe),
             "+TEST={}".format(test_name),
             "+RVFI_MAX={}".format(rvfi_max),
@@ -598,12 +673,7 @@ def run_simulations(root, dii_files, rvfi_max):
             "+INSTR_RESP_WMAX={}".format(instr_resp_wmax),
             "+DATA_GNT_WMAX={}".format(data_gnt_wmax),
             "+DATA_RESP_WMAX={}".format(data_resp_wmax),
-        ]
-        addata_path = dii.with_suffix(".addata")
-        if addata_path.is_file():
-            sim_command.append("+ADDATA=1")
-
-        run_cmd(sim_command,
+        ],
             cwd=verilator_dir,
             quiet=True,
         )
@@ -795,16 +865,44 @@ def main():
         help="TestRIG template/test name, for example: caprandom",
     )
 
-    parser.add_argument(
-        "--skip-sail",
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--vengine_only",
+        "--vengine-only",
+        dest="vengine_only",
         action="store_true",
-        help="Skip Sail/TestRIG docker run and reuse existing two_phase_output/results",
+        help="Run only the TestRIG VEngine instruction-trace generator",
     )
-
-    parser.add_argument(
-        "--skip-sim",
+    mode_group.add_argument(
+        "--phase1_only",
+        "--phase1-only",
+        dest="phase1_only",
         action="store_true",
-        help="Skip running simulations and only compare existing results",
+        help="Run VEngine generation and Phase-1 Sail ELF dumping, then stop",
+    )
+    mode_group.add_argument(
+        "--diff_only",
+        "--diff-only",
+        dest="diff_only",
+        action="store_true",
+        help="Skip Phase 1, Phase-2 Sail, and Verilog simulation; only compare "
+             "existing Phase-2 outputs",
+    )
+    mode_group.add_argument(
+        "--phase2_only",
+        "--phase2-only",
+        dest="phase2_only",
+        action="store_true",
+        help="Reuse existing two_phase_output, run Phase-2 Sail and Verilog "
+             "simulation, then compare",
+    )
+    mode_group.add_argument(
+        "--verilog_only",
+        "--verilog-only",
+        dest="verilog_only",
+        action="store_true",
+        help="Reuse existing two_phase_output and Phase-2 Sail results, run "
+             "only Verilog simulation, then compare",
     )
 
     parser.add_argument(
@@ -854,8 +952,22 @@ def main():
         sim_bin = verilator_dir / "bin"
         results_dir = verilator_dir / "results"
 
-        if args.skip_sim:
-            ref_dir = verilator_dir / "sail_results"
+        ref_dir = root / "two_phase_output" / "results"
+
+        if args.vengine_only or args.phase1_only:
+            run_testrig(
+                root=root,
+                sail_mode=args.sail_mode,
+                case_cnt=args.case_cnt,
+                phase1_instr_count=args.phase1_instr_count,
+                phase2_instr_count=args.phase2_instr_count,
+                test_name=args.test,
+                stop_after="vengine" if args.vengine_only else "phase1",
+            )
+            return 0
+
+        if args.diff_only:
+            require_dir(ref_dir, "existing Phase-2 Sail results directory")
             require_dir(results_dir, "existing simulation results directory")
             check_results(
                 ref_dir,
@@ -868,7 +980,13 @@ def main():
             )
             return 0
 
-        if not args.skip_sail:
+        if args.phase2_only:
+            run_phase2_sail(
+                root=root,
+                sail_mode=args.sail_mode,
+                phase2_instr_count=args.phase2_instr_count,
+            )
+        elif not args.verilog_only:
             run_testrig(
                 root=root,
                 sail_mode=args.sail_mode,
@@ -879,7 +997,6 @@ def main():
             )
         # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)
-        ref_dir = root / "two_phase_output" / "results"
         dii_files = convert_elfs_to_dii(root)
 
         results_dir = run_simulations(root, dii_files, args.phase2_instr_count)
