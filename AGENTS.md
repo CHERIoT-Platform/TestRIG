@@ -2,63 +2,6 @@
 
 These instructions are mandatory for all work started from this TestRIG project. Follow them for TestRIG itself and for the CHERIoT Sail and Sail RISC-V repositories used by this flow.
 
-## Authoritative repositories and branches
-
-Use only these repositories and branches unless the user explicitly specifies a different source or says not to use the repository:
-
-| Component | Authoritative repository | Required branch |
-| --- | --- | --- |
-| TestRIG | `https://github.com/CHERIoT-Platform/TestRIG.git` | `dii-read-from-file` |
-| CHERIoT Sail | `https://github.com/CHERIoT-Platform/cheriot-sail.git` | `dii-read-from-file` |
-| Sail RISC-V used by CHERIoT Sail | `https://github.com/CHERIoT-Platform/sail-riscv.git` | `cheriot-dii-read-from-file` |
-
-The primary project root is the TestRIG repository containing this file. Resolve the actual paths of CHERIoT Sail and its nested Sail RISC-V checkout from the current TestRIG checkout and its submodule metadata; do not guess paths from memory.
-
-## Mandatory start-of-task procedure
-
-Before analyzing, editing, or generating code:
-
-1. Use repository source as the authority. Do not reconstruct current source files from memory, prior chat output, cached snippets, or an older downloaded copy.
-2. Unless the user explicitly says not to pull or not to use the repository, ensure that the complete TestRIG repository and all required submodules are present in the local workspace.
-3. If TestRIG is absent, clone the required branch with its submodules:
-
-   ```bash
-   git clone --branch dii-read-from-file --recurse-submodules \
-     https://github.com/CHERIoT-Platform/TestRIG.git TestRIG
-   ```
-
-4. If a checkout already exists, inspect it before changing anything:
-
-   ```bash
-   git -C <repo> remote -v
-   git -C <repo> status --short --branch
-   git -C <repo> branch --show-current
-   ```
-
-5. Verify that each `origin` URL identifies the authoritative repository above. Verify the required branch explicitly; do not assume that the displayed directory name proves the repository or branch is correct.
-6. Preserve all existing user changes. Never discard, overwrite, reset, clean, or silently stash a dirty working tree. If existing changes prevent a safe update, create a separate fresh clone or worktree for the task, or stop and explain the conflict.
-7. For a safe existing checkout, update without rewriting history:
-
-   ```bash
-   git -C <repo> fetch --prune origin <required-branch>
-   git -C <repo> switch <required-branch>
-   git -C <repo> pull --ff-only origin <required-branch>
-   ```
-
-   If the branch does not exist locally, create it to track `origin/<required-branch>`. Never use force-pull, `git reset --hard`, or another destructive shortcut.
-8. From the updated TestRIG root, synchronize and populate submodules:
-
-   ```bash
-   git submodule sync --recursive
-   git submodule update --init --recursive
-   ```
-
-9. After submodule initialization, explicitly put CHERIoT Sail on `dii-read-from-file` and its Sail RISC-V checkout on `cheriot-dii-read-from-file`, then fetch and fast-forward each one safely. Do not leave either repository at an unrelated detached commit when the task requires current branch source.
-10. Before editing, record the resolved path, origin URL, branch, and starting commit of every repository that will be used.
-11. Read the actual relevant source files, callers, wrappers, build files, and tests from the synchronized checkout. When changing an interface or command-line option, search all downstream callers and wrapper scripts.
-
-If repository or network access is unavailable, do not pretend that cached source is current. Report the blocker and ask whether the user wants work based on the available snapshot.
-
 ## Workspace and dependency setup
 
 Install and use the tools needed to compile and execute the affected flow. The user's request authorizes task-relevant downloads and installations inside the local workspace or the project-provided containers.
@@ -120,22 +63,6 @@ Apply at least these language-specific checks when relevant, plus the repository
 
 Do not claim that code was compiled, run, or tested unless those commands were actually executed in the current task. If complete verification is blocked, state exactly what passed, what did not run, and why. Do not create a completed downloadable code file unless the user explicitly asks for an unverified draft after seeing the limitation.
 
-## Downloadable-file rules
-
-Create downloadable files only after the mandatory verification succeeds.
-
-1. Generate a unique, descriptive filename using this pattern:
-
-   ```text
-   <original-stem>_<YYYYMMDD_HHMMSS>_<short-change-description>.<extension>
-   ```
-
-   Use local time in `America/Los_Angeles`. If the name already exists, append `_02`, `_03`, and so on. Never overwrite or ambiguously reuse an earlier download name.
-2. Produce the download by copying the exact tested file; do not retype or regenerate its contents after testing.
-3. Compare the tested source and downloadable copy byte-for-byte with `cmp`, or record and compare SHA-256 hashes.
-4. If packaging multiple files, include only the required files, give the archive a unique timestamped name, and verify the archive can be listed and extracted.
-5. If the downloadable copy differs from the tested source, discard it, recreate it from the tested source, and repeat the comparison.
-
 ## Required final report
 
 Every completed code handoff must state:
@@ -145,6 +72,5 @@ Every completed code handoff must state:
 - Tools or containers installed or rebuilt, with verified versions where relevant.
 - Exact build and test commands executed and whether each passed.
 - Any limitations or checks that could not be completed.
-- The unique downloadable filename and its SHA-256 checksum.
 
 Lead with the result. Never say the work is complete, verified, or ready to download when a mandatory check failed or did not run.

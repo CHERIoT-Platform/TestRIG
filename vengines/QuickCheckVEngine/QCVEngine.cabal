@@ -53,6 +53,7 @@ executable QCVEngine
                        QuickCheckVEngine.Templates.GenHPM,
                        QuickCheckVEngine.Templates.GenCSRs,
                        QuickCheckVEngine.Templates.GenCHERI,
+                       QuickCheckVEngine.Templates.GenCHERIStruct,
                        QuickCheckVEngine.Templates.GenInterrupt,
                        QuickCheckVEngine.Templates.GenAll,
                        QuickCheckVEngine.Templates.GenTransExec,

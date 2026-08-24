@@ -12,4 +12,6 @@ utils/scripts/run_cheriot_kudu_rvfi.py --sail-mode rv32 --test rv32mem --case_cn
 utils/scripts/run_cheriot_kudu_rvfi.py --diff_only
 utils/scripts/run_cheriot_kudu_rvfi.py --verilog_only
 utils/scripts/run_cheriot_kudu_rvfi.py --phase2_only
+utils/scripts/run_cheriot_kudu_rvfi.py --phase1_only
+utils/scripts/run_cheriot_kudu_rvfi.py --vengine_only
 

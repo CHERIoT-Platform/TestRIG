@@ -80,6 +80,7 @@ import QuickCheckVEngine.Templates.GenCompressed
 import QuickCheckVEngine.Templates.GenAtomics
 import QuickCheckVEngine.Templates.GenFP
 import QuickCheckVEngine.Templates.GenCHERI
+import QuickCheckVEngine.Templates.GenCHERIStruct
 import QuickCheckVEngine.Templates.GenHPM
 import QuickCheckVEngine.Templates.GenTransExec
 import QuickCheckVEngine.Templates.GenInterrupt
@@ -305,6 +306,7 @@ allTests = [
            , ("capdecode",  "Xcheri Extension Capability Decode Template",            has_cheri,                                T.repeatTillEnd capDecodeTest)
            , ("cloadtags",  "Xcheri Extension CLoadTags Template",                    andPs [has_cheri, not . has_nocloadtags], T.repeatTillEnd cLoadTagsTest)
            , ("caprandom",  "Xcheri Extension Random Template",                       has_cheri,                                randomCHERITest)
+           , ("strrandom",  "Structured CHERIoT Random Template",                     has_cheri,                                strRandomTest)
            , ("caprvcrandom", "Xcheri RVC Extension Random Template",                 andPs [has_cheri, has_c],                 randomCHERIRVCTest)
            , ("interrupt",  "Interrupt Testing Template",                             const True,                               genInterruptTest)
            , ("all",        "All Verification",                                       const True,                               genAll)
