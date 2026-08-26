@@ -8,7 +8,7 @@ Install and use the tools needed to compile and execute the affected flow. The u
 
 1. Inspect the current branch's `README`, `Makefile`, Dockerfiles, Compose files, setup scripts, lockfiles, and CI configuration before choosing tool versions or commands.
 2. Prefer the environment already defined by TestRIG, including its Docker Compose services and Dockerfiles. Reuse valid images and caches when possible; rebuild an image when its definition or required contents changed.
-3. If a required tool is missing, install it in a project-local environment, a dedicated tool directory, a Python virtual environment, an opam switch, or the appropriate TestRIG container. Avoid unrelated machine-wide changes.
+3. If a required tool is missing, first try to determne whether it is available from one of the docker containers available. If not, install it in a project-local environment, a dedicated tool directory, a Python virtual environment, an opam switch, or the appropriate TestRIG container. Avoid unrelated machine-wide changes.
 4. Install required tools such as GHC/Cabal, opam/Sail, Verilator, Python packages, Docker images, and other dependencies when they are necessary to build or run the affected code. Do not skip verification merely because a tool is initially missing.
 5. Use versions required by the checked-out repository. Do not arbitrarily upgrade a compiler, dependency, lockfile, submodule, or container base image.
 6. Verify every installed tool before relying on it. Use an appropriate version or smoke check, for example:
@@ -74,3 +74,11 @@ Every completed code handoff must state:
 - Any limitations or checks that could not be completed.
 
 Lead with the result. Never say the work is complete, verified, or ready to download when a mandatory check failed or did not run.
+
+## Terminal output
+
+- Use ASCII characters only in terminal-visible output.
+- Do not use Unicode punctuation, icons, emojis, or box-drawing characters.
+- Use "-" instead of en/em dashes.
+- Use "[OK]" and "[FAIL]" instead of checkmarks or cross marks.
+- Use straight ASCII quotation marks.

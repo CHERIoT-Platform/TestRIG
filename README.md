@@ -190,6 +190,8 @@ Sail), see [`BUILD_SAIL_MACOS.md`](./BUILD_SAIL_MACOS.md).
   -s, --seed N           RNG seed (Python fallback only; QCVEngine ignores)
       --gen MODE         generator: auto | qcvengine | python (default: auto)
       --template LABEL   QCVEngine template to use        (default: caprandom)
+      --phase1_no_sail   build Phase-1 ELFs directly with build_struct_elf.py
+                         (uses/requires the strrandom template)
       --clean            wipe work-dir contents first
   -h, --help             show this help
 ```

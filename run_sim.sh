@@ -4,11 +4,14 @@ set -u
 
 usage() {
   echo "Usage: $0 [-rv32] [--phase1_instr_count N] [--phase2_instr_count N]"
+  echo "          [--phase1_no_sail]"
   echo "          [--test TEST_NAME] [--case_cnt N] [N]"
   echo "  -rv32                  Build and run in RV32 mode"
   echo "  --phase1_instr_count N Phase-1 generated instruction count (default: 1000)"
   echo "  --phase2_instr_count N Phase-2 Sail/Verilator instruction limit"
   echo "                         (default: phase1_instr_count)"
+  echo "  --phase1_no_sail       Build Phase-1 ELFs with build_struct_elf.py"
+  echo "                         using the strrandom template"
   echo "  --test TEST_NAME       TestRIG template/test name (default: caprandom)"
   echo "  --case_cnt N           Number of test cases per wrapper run"
   echo "  N                      Number of wrapper runs (default: 1000)"
@@ -19,7 +22,9 @@ N_SET=0
 RV32=0
 PHASE1_INSTR_COUNT=1000
 PHASE2_INSTR_COUNT=""
+PHASE1_NO_SAIL=0
 TEST_NAME="caprandom"
+TEST_NAME_SET=0
 CASE_CNT=""
 
 while [ "$#" -gt 0 ]; do
@@ -38,9 +43,14 @@ while [ "$#" -gt 0 ]; do
       PHASE2_INSTR_COUNT="$2"
       shift 2
       ;;
+    --phase1_no_sail|--phase1-no-sail)
+      PHASE1_NO_SAIL=1
+      shift
+      ;;
     --test)
       [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage >&2; exit 2; }
       TEST_NAME="$2"
+      TEST_NAME_SET=1
       shift 2
       ;;
     --case_cnt)
@@ -69,6 +79,19 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$PHASE1_NO_SAIL" -eq 1 ]; then
+  if [ "$RV32" -eq 1 ]; then
+    echo "ERROR: --phase1_no_sail requires CHERIoT mode" >&2
+    exit 2
+  fi
+  if [ "$TEST_NAME_SET" -eq 0 ]; then
+    TEST_NAME="strrandom"
+  elif [ "$TEST_NAME" != "strrandom" ]; then
+    echo "ERROR: --phase1_no_sail requires --test strrandom" >&2
+    exit 2
+  fi
+fi
 
 : "${PHASE2_INSTR_COUNT:=${PHASE1_INSTR_COUNT}}"
 
@@ -156,6 +179,9 @@ RUNNER_ARGS+=(
   --phase1_instr_count "$PHASE1_INSTR_COUNT"
   --phase2_instr_count "$PHASE2_INSTR_COUNT"
 )
+if [ "$PHASE1_NO_SAIL" -eq 1 ]; then
+  RUNNER_ARGS+=(--phase1_no_sail)
+fi
 RUNNER_ARGS+=(--test "$TEST_NAME")
 if [ -n "$CASE_CNT" ]; then
   RUNNER_ARGS+=(--case_cnt "$CASE_CNT")

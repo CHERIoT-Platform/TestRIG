@@ -28,7 +28,6 @@
 --
 
 module QuickCheckVEngine.Templates.GenCHERIStruct (
-  bcReg,
   spReg,
   raReg,
   strBranch,
@@ -47,33 +46,31 @@ import QuickCheckVEngine.Templates.Utils
 import Data.Bits
 
 -- | Registers reserved for the structured control-flow templates.
-bcReg, spReg, raReg :: Integer
-bcReg = 14
+spReg, raReg :: Integer
 spReg = 2
 raReg = 1
 
 protectedRegs :: [Integer]
-protectedRegs = [bcReg, spReg]
+protectedRegs = [spReg]
 
 protectedDest :: Gen Integer
 protectedDest = suchThat dest (`notElem` protectedRegs)
 
 -- | Generate a backward branch whose setup and intervening arithmetic do not
--- overwrite the structured branch-control or stack registers.
+-- overwrite its temporary or the stack register.
 strBranch :: Template
 strBranch = random $ do
   tmp1 <- suchThat dest $ \reg ->
     reg /= 0 && reg `notElem` protectedRegs
   tmp2 <- suchThat dest $ \reg ->
     reg /= 0 && reg `notElem` (tmp1 : protectedRegs)
-  anyReg <- src
 
   middleCount <- choose (1, 3)
   middle <- vectorOf middleCount $ do
     src1 <- src
     src2 <- src
     otherDst <- suchThat dest $ \reg ->
-      reg `notElem` [bcReg, spReg, tmp1, tmp2]
+      reg `notElem` [spReg, tmp1, tmp2]
     imm <- bits 12
     longImm <- bits 20
     elements $
@@ -81,8 +78,8 @@ strBranch = random $ do
       ++ rv32_xcheri_arithmetic src1 src2 imm otherDst
 
   (branchOp, mask) <- elements
-    [ (beq,  0x03)
-    , (bne,  0x03)
+    [ (beq,  0x0f)
+    , (bne,  0x0f)
     , (blt,  0x0f)
     , (bltu, 0x0f)
     , (bge,  0x0f)
@@ -90,14 +87,14 @@ strBranch = random $ do
     ]
 
   -- Branch immediates encode bits 12:1 of the byte displacement.  Every
-  -- instruction in this sequence is 32 bits, so this targets the first addi.
+  -- instruction in this sequence is 32 bits, so this targets the mcycle read.
   let branchImm =
         (0x1000 - 2 * toInteger (3 + middleCount)) Data.Bits..&. 0x0fff
 
   return $ instSeq $
-    [ addi bcReg bcReg 1
-    , andi tmp1 bcReg mask
-    , andi tmp2 anyReg mask
+    [ csrrs tmp1 0xB00 0
+    , andi tmp1 tmp1 mask
+    , addi tmp2 0 8
     ] ++ middle ++ [branchOp tmp1 tmp2 branchImm]
 
 -- | Generate a CSR access without writing either protected register.
@@ -127,7 +124,7 @@ strCSRRW = random $ do
       , inst $ csrrci rd csrAddr uimm
       ]
 
--- | Generate legal CHERIoT memory sequences while reserving bcReg and spReg.
+-- | Generate legal CHERIoT memory sequences while reserving spReg.
 strCHERILoadStore :: Integer -> Template
 strCHERILoadStore baseOffset = random $ do
   capReg <- suchThat src $ \reg ->
@@ -184,7 +181,7 @@ strCHERILoadStore baseOffset = random $ do
   return $ instSeq $
     [cspecialrw capReg 29 0] ++ middle ++ memOps ++ arithOps
 
--- | Randomize capability-register addresses without writing bcReg or spReg.
+-- | Randomize capability-register addresses without writing spReg.
 strRandomizeCapRegAddr :: Template
 strRandomizeCapRegAddr = random $ do
   let randomizedRegs = filter (`notElem` protectedRegs) [2..14]
@@ -241,7 +238,7 @@ strRandomizeCapRegAddr = random $ do
   return $ instSeq $ x1Sequence ++ remainingSequences
 
 -- | Generate compressed arithmetic/register instructions only.  Loads,
--- stores, jumps, branches, traps, and instructions that write bcReg or spReg
+-- stores, jumps, branches, traps, and instructions that write spReg
 -- are deliberately omitted.
 gen_rv_c_simple :: Template
 gen_rv_c_simple = random $ do
@@ -311,16 +308,28 @@ strSubroutineMiddle = random $ do
     , (5,  strCSRRW)
     , (20, gen_rv_c_simple)
     , (20, strBranch)
-    , (10, instUniform localCalls)
+    , (2, instUniform localCalls)
     ]
 
 -- | Structured subroutine with a capability stack push/pop and return.
 legalSubroutine :: Template
 legalSubroutine =
   noShrink stackPush
-  <> repeatTillEnd strSubroutineMiddle
+  <> subroutineBody
   <> noShrink stackPop
   where
+    subroutineBody = random $ do
+      middleOpCount <- choose (10, 50)
+      let opsBeforeCall = middleOpCount `quot` 2
+          opsAfterCall = middleOpCount - opsBeforeCall
+      return $
+        repeatN opsBeforeCall strSubroutineMiddle
+        <> noShrink mandatoryLocalCall
+        <> repeatN opsAfterCall strSubroutineMiddle
+    mandatoryLocalCall = uniform
+      [ inst $ c_jal 1
+      , inst $ jal raReg 2
+      ]
     stackPush = instSeq
       [ csc raReg spReg 0
       , cincaddrimm spReg spReg 0xff8
@@ -348,8 +357,6 @@ strRandomTest = random $ do
     addressTmpReg = 15
     initializeStructuredRegs =
       instSeq
-        [ addi bcReg 0 0
-        , cspecialrw spReg 29 0
-        ]
+        [cspecialrw spReg 29 0]
       <> li32 addressTmpReg 0x08000800
       <> inst (csetaddr spReg spReg addressTmpReg)

@@ -3,6 +3,8 @@
 ./run_sim.sh 100 --test caprevoke --case_cnt 10 --phase1_instr_count 10000 |egrep "PASS|STOP|building|verilog|run"
 ./run_sim.sh 100 -rv32 --test rv32mem --case_cnt 10  --phase1_instr_count 10000  |egrep "PASS|STOP|building|verilog|run"
 
+./run_sim.sh 100 --phase1_no_sail --case_cnt 10 --phase1_instr_count 1000 --phase2_instr_count 50000 |egrep "PASS|STOP|building|verilog|run"
+
 #random: rv32 random test, address wraparound issue.
 ./run_sim.sh 100 -rv32 --test random  |egrep "PASS|STOP|building|verilog|run"
 

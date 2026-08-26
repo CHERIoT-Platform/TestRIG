@@ -45,6 +45,7 @@ SUPPORTED_CSR_ADDRESSES = frozenset({
     0x342,
     0x343,
     0x344,
+    0xB00,
 }) | frozenset(range(0xBC5, 0xC00))
 
 COMPARE_FIELDS = [
@@ -464,6 +465,7 @@ def run_testrig(
     phase1_instr_count=1000,
     phase2_instr_count=None,
     test_name=None,
+    phase1_no_sail=False,
     stop_after=None,
 ):
     if case_cnt is None:
@@ -483,6 +485,8 @@ def run_testrig(
     ]
     if test_name is not None:
         command_args.extend(["--test", test_name])
+    if phase1_no_sail:
+        command_args.append("--phase1_no_sail")
     if stop_after == "vengine":
         command_args.append("--vengine-only")
     elif stop_after == "phase1":
@@ -865,6 +869,15 @@ def main():
         help="TestRIG template/test name, for example: caprandom",
     )
 
+    parser.add_argument(
+        "--phase1_no_sail",
+        "--phase1-no-sail",
+        dest="phase1_no_sail",
+        action="store_true",
+        help="Skip Phase-1 Sail and build trace_*.elf files from the "
+             "strrandom traces with build_struct_elf.py",
+    )
+
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--vengine_only",
@@ -878,7 +891,7 @@ def main():
         "--phase1-only",
         dest="phase1_only",
         action="store_true",
-        help="Run VEngine generation and Phase-1 Sail ELF dumping, then stop",
+        help="Run VEngine generation and Phase-1 ELF generation, then stop",
     )
     mode_group.add_argument(
         "--diff_only",
@@ -942,6 +955,14 @@ def main():
     if args.case_cnt <= 0:
         parser.error("--case_cnt must be greater than zero")
 
+    if args.phase1_no_sail:
+        if args.sail_mode != "cheriot":
+            parser.error("--phase1_no_sail requires --sail-mode cheriot")
+        if args.test is None:
+            args.test = "strrandom"
+        elif args.test != "strrandom":
+            parser.error("--phase1_no_sail requires --test strrandom")
+
     root = Path(args.root).resolve()
 
     try:
@@ -962,6 +983,7 @@ def main():
                 phase1_instr_count=args.phase1_instr_count,
                 phase2_instr_count=args.phase2_instr_count,
                 test_name=args.test,
+                phase1_no_sail=args.phase1_no_sail,
                 stop_after="vengine" if args.vengine_only else "phase1",
             )
             return 0
@@ -994,6 +1016,7 @@ def main():
                 phase1_instr_count=args.phase1_instr_count,
                 phase2_instr_count=args.phase2_instr_count,
                 test_name=args.test,
+                phase1_no_sail=args.phase1_no_sail,
             )
         # sim_bin = prepare_sim_bin(root)
         # ref_dir = prepare_ref_trace(root)

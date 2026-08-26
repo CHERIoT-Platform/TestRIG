@@ -16,6 +16,7 @@
 #                           [--clean] [--seed N]
 #                           [--gen auto|qcvengine|python]
 #                           [--test TEST_NAME]
+#                           [--phase1_no_sail]
 #                           [--vengine-only|--phase1-only]
 #                           (underscore aliases are also accepted)
 
@@ -30,6 +31,7 @@ SEED=""
 CLEAN=0
 VENGINE_ONLY=0
 PHASE1_ONLY=0
+PHASE1_NO_SAIL=0
 # Instruction-stream generator. "auto" (default) picks the QCVEngine
 # Haskell binary when available and falls back to the Python script
 # otherwise. Force one or the other with --gen qcvengine|python.
@@ -49,7 +51,7 @@ ARCHITECTURE=""
 TEMPLATE=""
 
 usage() {
-  sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -73,6 +75,8 @@ while [[ $# -gt 0 ]]; do
                          VENGINE_ONLY=1; shift ;;
     --phase1-only|--phase1_only)
                          PHASE1_ONLY=1; shift ;;
+    --phase1-no-sail|--phase1_no_sail)
+                         PHASE1_NO_SAIL=1; shift ;;
     --gen)              GEN="$2"; shift 2 ;;
     --template|--test)
       [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }
@@ -105,7 +109,11 @@ case "${SAIL_MODEL}" in
   cheriot)
     SAIL="${SCRIPT_DIR}/riscv-implementations/cheriot-sail/c_emulator/cheri_riscv_rvfi_RV32"
     : "${ARCHITECTURE:=rv32ecZifencei_Xcheriot}"
-    : "${TEMPLATE:=caprandom}"
+    if [[ ${PHASE1_NO_SAIL} -eq 1 ]]; then
+      : "${TEMPLATE:=strrandom}"
+    else
+      : "${TEMPLATE:=caprandom}"
+    fi
     ;;
 
   rv32)
@@ -118,6 +126,17 @@ case "${SAIL_MODEL}" in
     die "Unknown --sail-model '${SAIL_MODEL}' (use cheriot or rv32)"
     ;;
 esac
+
+if [[ ${PHASE1_NO_SAIL} -eq 1 ]]; then
+  if [[ "${SAIL_MODEL}" != "cheriot" ]]; then
+    echo "ERROR: --phase1_no_sail requires --sail-model cheriot" >&2
+    exit 1
+  fi
+  if [[ "${TEMPLATE}" != "strrandom" ]]; then
+    echo "ERROR: --phase1_no_sail requires --test strrandom" >&2
+    exit 1
+  fi
+fi
 
 TRACE_DIR="${WORK_DIR}/traces"
 ELF_DIR="${WORK_DIR}/elfs"
@@ -139,7 +158,12 @@ mkdir -p "${TRACE_DIR}" "${ELF_DIR}" "${RESULTS_DIR}"
 
 # Prerequisites
 command -v python3 >/dev/null || die "python3 not in PATH"
-if [[ ${VENGINE_ONLY} -eq 0 ]]; then
+NEED_SAIL=1
+if [[ ${VENGINE_ONLY} -eq 1 ]] || \
+   [[ ${PHASE1_ONLY} -eq 1 && ${PHASE1_NO_SAIL} -eq 1 ]]; then
+  NEED_SAIL=0
+fi
+if [[ ${NEED_SAIL} -eq 1 ]]; then
   [[ -x "${SAIL}" ]] || die "Sail RVFI binary not found/executable at ${SAIL}
     Build it: see BUILD_SAIL_MACOS.md (macOS) or riscv-implementations/cheriot-sail/RUNNING.md (Linux)"
   ok "Sail binary found"
@@ -222,19 +246,35 @@ if [[ ${VENGINE_ONLY} -eq 1 ]]; then
   exit 0
 fi
 
-# Phase 1 — run each hex file through Sail to dump memory to an ELF.
-# We deliberately do NOT ask Sail for Phase-1 RVFI; the deliverable is
-# Phase-2 RVFI from the ELF re-exec path (matches Phase 2 = ELF → RVFI).
-log "Step 2/4  Phase 1 — execute traces in Sail, dump memory to ELF"
-python3 "${SCRIPTS}/generate_elfs_from_traces.py" \
-  --input-dir "${TRACE_DIR}" \
-  --output-dir "${ELF_DIR}" \
-  --sail-path "${SAIL}"
+# Phase 1 - either run each hex file through Sail to dump memory to an ELF,
+# or directly lay out a structured strrandom trace with build_struct_elf.py.
+if [[ ${PHASE1_NO_SAIL} -eq 1 ]]; then
+  log "Step 2/4  Phase 1 - build structured ELFs without Sail"
+  STRUCT_ELF_ARGS=(
+    --input-dir "${TRACE_DIR}"
+    --output-dir "${ELF_DIR}"
+    --input-pattern 'trace_*.hex.txt'
+  )
+  [[ -n "${SEED}" ]] && STRUCT_ELF_ARGS+=(--seed "${SEED}")
+  python3 "${SCRIPTS}/build_struct_elf.py" "${STRUCT_ELF_ARGS[@]}"
+else
+  # We deliberately do NOT ask Sail for Phase-1 RVFI; the deliverable is
+  # Phase-2 RVFI from the ELF re-exec path (matches Phase 2 = ELF to RVFI).
+  log "Step 2/4  Phase 1 — execute traces in Sail, dump memory to ELF"
+  python3 "${SCRIPTS}/generate_elfs_from_traces.py" \
+    --input-dir "${TRACE_DIR}" \
+    --output-dir "${ELF_DIR}" \
+    --sail-path "${SAIL}"
+fi
 N_ELFS=$(find "${ELF_DIR}" -maxdepth 1 -name '*.elf' | wc -l | tr -d ' ')
 ok "generated ${N_ELFS} ELF(s)"
 
 if [[ ${PHASE1_ONLY} -eq 1 ]]; then
-  log "Done — Phase 1 Sail simulation only"
+  if [[ ${PHASE1_NO_SAIL} -eq 1 ]]; then
+    log "Done - Phase 1 structured ELF generation only"
+  else
+    log "Done — Phase 1 Sail simulation only"
+  fi
   exit 0
 fi
 
@@ -284,6 +324,11 @@ ok "decoded ${N_P2_TXT} Phase-2 RVFI text trace(s) in ${RESULTS_DIR}/*_phase2.rv
 
 # Summary.
 SUMMARY="${WORK_DIR}/SUMMARY.txt"
+if [[ ${PHASE1_NO_SAIL} -eq 1 ]]; then
+  PHASE1_SUMMARY="generator -> build_struct_elf.py -> ELF"
+else
+  PHASE1_SUMMARY="generator -> Sail (-f) -> ELF"
+fi
 cat > "${SUMMARY}" <<EOF
 Two-phase execution summary
 ===========================
@@ -292,7 +337,7 @@ architecture:         ${ARCHITECTURE}
 count:                ${COUNT} traces × ${INSTRUCTIONS} instructions
 phase-2 instr limit:  ${PHASE2_INSTRUCTIONS}
 
-Phase 1 — generator → Sail (-f) → ELF
+Phase 1 — ${PHASE1_SUMMARY}
   hex traces:         ${N_TRACES}      (${TRACE_DIR}/trace_*.hex.txt)
   ELFs:               ${N_ELFS}        (${ELF_DIR}/trace_*.elf)
   additional data:    embedded in ELF (.addata_main / .addata_tags)
