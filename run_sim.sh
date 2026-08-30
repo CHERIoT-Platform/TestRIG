@@ -5,13 +5,16 @@ set -u
 usage() {
   echo "Usage: $0 [-rv32] [--phase1_instr_count N] [--phase2_instr_count N]"
   echo "          [--phase1_no_sail]"
+  echo "          [--remote_vcs USERNAME@HOST]"
   echo "          [--test TEST_NAME] [--case_cnt N] [N]"
   echo "  -rv32                  Build and run in RV32 mode"
   echo "  --phase1_instr_count N Phase-1 generated instruction count (default: 1000)"
-  echo "  --phase2_instr_count N Phase-2 Sail/Verilator instruction limit"
+  echo "  --phase2_instr_count N Phase-2 Sail/Verilog instruction limit"
   echo "                         (default: phase1_instr_count)"
   echo "  --phase1_no_sail       Build Phase-1 ELFs with build_struct_elf.py"
   echo "                         using the strrandom template"
+  echo "  --remote_vcs USERNAME@HOST"
+  echo "                         Run Verilog simulation remotely with VCS"
   echo "  --test TEST_NAME       TestRIG template/test name (default: caprandom)"
   echo "  --case_cnt N           Number of test cases per wrapper run"
   echo "  N                      Number of wrapper runs (default: 1000)"
@@ -23,6 +26,7 @@ RV32=0
 PHASE1_INSTR_COUNT=1000
 PHASE2_INSTR_COUNT=""
 PHASE1_NO_SAIL=0
+REMOTE_VCS_TARGET=""
 TEST_NAME="caprandom"
 TEST_NAME_SET=0
 CASE_CNT=""
@@ -46,6 +50,11 @@ while [ "$#" -gt 0 ]; do
     --phase1_no_sail|--phase1-no-sail)
       PHASE1_NO_SAIL=1
       shift
+      ;;
+    --remote_vcs|--remote-vcs)
+      [ "$#" -ge 2 ] || { echo "ERROR: $1 requires USERNAME@HOST" >&2; usage >&2; exit 2; }
+      REMOTE_VCS_TARGET="$2"
+      shift 2
       ;;
     --test)
       [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage >&2; exit 2; }
@@ -91,6 +100,12 @@ if [ "$PHASE1_NO_SAIL" -eq 1 ]; then
     echo "ERROR: --phase1_no_sail requires --test strrandom" >&2
     exit 2
   fi
+fi
+
+if [ -n "$REMOTE_VCS_TARGET" ] &&
+   ! [[ "$REMOTE_VCS_TARGET" =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]]; then
+  echo "ERROR: --remote_vcs requires USERNAME@HOST" >&2
+  exit 2
 fi
 
 : "${PHASE2_INSTR_COUNT:=${PHASE1_INSTR_COUNT}}"
@@ -152,23 +167,27 @@ fi
 TOTAL_RUNS="${N}"
 
 echo "Test name: ${TEST_NAME}"
-echo "===== building Verilator model ====="
-(
-  cd riscv-implementations/cheriot-kudu/sim/verilator || exit 1
+if [ -n "$REMOTE_VCS_TARGET" ]; then
+  echo "===== using remote VCS simulation ====="
+else
+  echo "===== building Verilator model ====="
+  (
+    cd riscv-implementations/cheriot-kudu/sim/verilator || exit 1
 
-  if [ "$RV32" -eq 1 ]; then
-    ./vgen -dii -rv32 || exit $?
-  else
-    ./vgen -dii || exit $?
+    if [ "$RV32" -eq 1 ]; then
+      ./vgen -dii -rv32 || exit $?
+    else
+      ./vgen -dii || exit $?
+    fi
+
+    ./vcomp
+  )
+  build_rc=$?
+
+  if [ "$build_rc" -ne 0 ]; then
+    echo "ERROR: Verilator build failed with code $build_rc" >&2
+    exit "$build_rc"
   fi
-
-  ./vcomp
-)
-build_rc=$?
-
-if [ "$build_rc" -ne 0 ]; then
-  echo "ERROR: Verilator build failed with code $build_rc" >&2
-  exit "$build_rc"
 fi
 
 RUNNER_ARGS=()
@@ -181,6 +200,9 @@ RUNNER_ARGS+=(
 )
 if [ "$PHASE1_NO_SAIL" -eq 1 ]; then
   RUNNER_ARGS+=(--phase1_no_sail)
+fi
+if [ -n "$REMOTE_VCS_TARGET" ]; then
+  RUNNER_ARGS+=(--remote_vcs "$REMOTE_VCS_TARGET")
 fi
 RUNNER_ARGS+=(--test "$TEST_NAME")
 if [ -n "$CASE_CNT" ]; then

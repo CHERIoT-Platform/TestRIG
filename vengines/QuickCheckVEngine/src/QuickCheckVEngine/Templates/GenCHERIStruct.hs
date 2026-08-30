@@ -56,46 +56,83 @@ protectedRegs = [spReg]
 protectedDest :: Gen Integer
 protectedDest = suchThat dest (`notElem` protectedRegs)
 
--- | Generate a backward branch whose setup and intervening arithmetic do not
--- overwrite its temporary or the stack register.
+-- | Generate a forward or backward branch whose setup and intervening
+-- arithmetic do not overwrite its temporary or the stack register.
 strBranch :: Template
 strBranch = random $ do
+  branchCount <- choose (1, 2)
+  branchConfigs <- vectorOf branchCount $ do
+    (branchOp, backwardMask, backwardTmpValue) <- elements
+      [ (beq,  0x0f, 8)
+      , (bne,  0x01, 0)
+      , (blt,  0x0f, 2)
+      , (bltu, 0x0f, 2)
+      , (bge,  0x0f, 13)
+      , (bgeu, 0x0f, 13)
+      ]
+    isBackward <- elements [False, True]
+    let (mask, tmpValue) =
+          if isBackward
+            then (backwardMask, backwardTmpValue)
+            else (0x0f, 8)
+    return (branchOp, mask, tmpValue, isBackward)
+
   tmp1 <- suchThat dest $ \reg ->
     reg /= 0 && reg `notElem` protectedRegs
   tmp2 <- suchThat dest $ \reg ->
     reg /= 0 && reg `notElem` (tmp1 : protectedRegs)
+  tmp3 <- suchThat dest $ \reg ->
+    reg /= 0 && reg `notElem` (tmp2 : tmp1 : protectedRegs)
+  tmp4 <- suchThat dest $ \reg ->
+    reg /= 0 && reg `notElem` (tmp3 : tmp2 : tmp1 : protectedRegs)
 
   middleCount <- choose (1, 3)
   middle <- vectorOf middleCount $ do
     src1 <- src
     src2 <- src
     otherDst <- suchThat dest $ \reg ->
-      reg `notElem` [spReg, tmp1, tmp2]
+      reg `notElem` [spReg, tmp1, tmp2, tmp3, tmp4]
     imm <- bits 12
     longImm <- bits 20
     elements $
          rv32_i_arith src1 src2 otherDst imm longImm
       ++ rv32_xcheri_arithmetic src1 src2 imm otherDst
 
-  (branchOp, mask) <- elements
-    [ (beq,  0x0f)
-    , (bne,  0x0f)
-    , (blt,  0x0f)
-    , (bltu, 0x0f)
-    , (bge,  0x0f)
-    , (bgeu, 0x0f)
-    ]
-
-  -- Branch immediates encode bits 12:1 of the byte displacement.  Every
-  -- instruction in this sequence is 32 bits, so this targets the mcycle read.
-  let branchImm =
-        (0x1000 - 2 * toInteger (3 + middleCount)) Data.Bits..&. 0x0fff
+  -- Put every mcycle read at the start so build_struct_elf can use the
+  -- consecutive reads as the branch-group marker.  The remaining setup blocks
+  -- precede the unchanged arithmetic middle, and all branches remain at the
+  -- end.  A backward branch targets its corresponding mcycle read;
+  -- build_struct_elf preserves the placeholder direction when assigning the
+  -- final target.
+  let tmpPairs = [(tmp1, tmp2), (tmp3, tmp4)]
+      activePairs = take branchCount tmpPairs
+      mcycleReads =
+        [ csrrs lhs 0xB00 0
+        | (lhs, _) <- activePairs
+        ]
+      setupInstructions = concat
+        [ [ andi lhs lhs mask
+          , addi rhs 0 tmpValue
+          ]
+        | ((_, mask, tmpValue, _), (lhs, rhs)) <-
+            zip branchConfigs activePairs
+        ]
+      branchInstructions =
+        [ let mcycleIndex = branchIndex
+              branchPosition = 3 * branchCount + middleCount + branchIndex
+              backwardDistance = branchPosition - mcycleIndex
+              branchImm =
+                if isBackward
+                  then (0x1000 - 2 * toInteger backwardDistance)
+                       Data.Bits..&. 0x0fff
+                  else 2
+          in branchOp lhs rhs branchImm
+        | (branchIndex, ((branchOp, _, _, isBackward), (lhs, rhs))) <-
+            zip [0..] (zip branchConfigs activePairs)
+        ]
 
   return $ instSeq $
-    [ csrrs tmp1 0xB00 0
-    , andi tmp1 tmp1 mask
-    , addi tmp2 0 8
-    ] ++ middle ++ [branchOp tmp1 tmp2 branchImm]
+    mcycleReads ++ setupInstructions ++ middle ++ branchInstructions
 
 -- | Generate a CSR access without writing either protected register.
 strCSRRW :: Template
@@ -295,21 +332,29 @@ strSubroutineMiddle = random $ do
         ++ rv32_xcheri_arithmetic srcAddr srcData imm destReg
         ++ rv32_xcheri_misc srcAddr srcData srcScr imm destReg
 
-      -- Both calls target the immediately following instruction.  They still
-      -- exercise link-register writes without jumping outside the structure.
-      localCalls = [c_jal 1, jal raReg 2]
-
   return $ dist
-    [ (20, strCHERILoadStore 0)
+    [ (10, strCHERILoadStore 0)
     , (20, instUniform rv32iNoControl)
-    , (10, instUniform cheriNoControl)
+    , (20, instUniform cheriNoControl)
     , (20, instUniform $ rv32_m srcAddr srcData destReg)
     , (5,  inst $ cspecialrw destReg srcScr srcAddr)
     , (5,  strCSRRW)
     , (20, gen_rv_c_simple)
     , (20, strBranch)
-    , (2, instUniform localCalls)
     ]
+
+-- | Arithmetic operations permitted after the first subroutine call.  Preserve
+-- both the stack and return-address registers so the epilogue remains valid.
+strSubroutineTailArithmetic :: Template
+strSubroutineTailArithmetic = random $ do
+  src1 <- src
+  src2 <- src
+  destReg <- suchThat dest (`notElem` [spReg, raReg])
+  imm <- bits 12
+  longImm <- bits 20
+  return $ instUniform $
+       rv32_i_arith src1 src2 destReg imm longImm
+    ++ rv32_xcheri_arithmetic src1 src2 imm destReg
 
 -- | Structured subroutine with a capability stack push/pop and return.
 legalSubroutine :: Template
@@ -319,14 +364,21 @@ legalSubroutine =
   <> noShrink stackPop
   where
     subroutineBody = random $ do
-      middleOpCount <- choose (10, 50)
-      let opsBeforeCall = middleOpCount `quot` 2
-          opsAfterCall = middleOpCount - opsBeforeCall
+      middleOpCount <- choose (50, 100)
       return $
-        repeatN opsBeforeCall strSubroutineMiddle
-        <> noShrink mandatoryLocalCall
-        <> repeatN opsAfterCall strSubroutineMiddle
-    mandatoryLocalCall = uniform
+        repeatN middleOpCount strSubroutineMiddle
+        -- Keep all calls in a tail region after every generated branch.  Only
+        -- arithmetic operations may separate the calls or follow the last one.
+        <> subroutineCallTail
+    subroutineCallTail = random $ do
+      callCount <- choose (1, 3)
+      arithmeticCounts <- vectorOf callCount $ choose (0, 2)
+      return $ mconcat
+        [ noShrink mandatoryTailCall
+          <> repeatN arithmeticCount strSubroutineTailArithmetic
+        | arithmeticCount <- arithmeticCounts
+        ]
+    mandatoryTailCall = uniform
       [ inst $ c_jal 1
       , inst $ jal raReg 2
       ]
@@ -347,7 +399,7 @@ legalSubroutine =
 -- registers, and generate between three and ten structured subroutines.
 strRandomTest :: Template
 strRandomTest = random $ do
-  subroutineCount <- choose (3, 10)
+  subroutineCount <- choose (5, 10)
   return $
     noShrink initializeStructuredRegs
     <> noShrink strRandomizeCapRegAddr
@@ -358,5 +410,5 @@ strRandomTest = random $ do
     initializeStructuredRegs =
       instSeq
         [cspecialrw spReg 29 0]
-      <> li32 addressTmpReg 0x08000800
+      <> li32 addressTmpReg 0x808f0000
       <> inst (csetaddr spReg spReg addressTmpReg)

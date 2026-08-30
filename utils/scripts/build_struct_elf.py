@@ -5,7 +5,8 @@ The input is the annotated hexadecimal text emitted by QCVEngine.  This tool
 lays instructions out densely from 0x80000080, retargets structured branches,
 connects subroutine call sites into a rooted forest, replaces unused call sites
 with width-preserving NOPs, and writes an ELF32 RISC-V executable with symbols.
-The ELF also contains the CHERIoT exception handler used by Sail at 0x807f0000.
+The ELF also contains the CHERIoT exception handler used by Sail at 0x807f0000
+and the VEngine additional-data base and size in a .addata_info section.
 """
 
 import argparse
@@ -37,6 +38,7 @@ STACK_POP = 0x00013083
 RETURN_JALR = 0x00008067
 RETURN_CJR = 0x00008082
 MCYCLE_CSR = 0xB00
+ADDATA_MARKER_ADDRESS = 0xFFFFFF00
 NOP32 = 0x00000013
 NOP16 = 0x0001
 
@@ -159,6 +161,89 @@ def find_main_loop(instructions):
     raise TraceError("missing three consecutive 'jal x1, 0' main instructions")
 
 
+def sign_extend(value, bits):
+    sign_bit = 1 << (bits - 1)
+    return (value & (sign_bit - 1)) - (value & sign_bit)
+
+
+def find_addata_info(instructions, initial_end):
+    """Decode the two initializer stores to the additional-data marker.
+
+    The VEngine initializer writes the additional-data base followed by its
+    entry count to 0xffffff00.  Track only the instructions needed to recover
+    those values before the three-instruction main loop.
+    """
+    registers = [None] * 32
+    registers[0] = 0
+    special_registers = {}
+    marker_values = []
+
+    for instruction in instructions[:initial_end]:
+        if instruction.size != 4:
+            continue
+        value = instruction.value
+        opcode = value & 0x7F
+        rd = (value >> 7) & 0x1F
+        funct3 = (value >> 12) & 0x7
+        rs1 = (value >> 15) & 0x1F
+        rs2 = (value >> 20) & 0x1F
+        funct7 = (value >> 25) & 0x7F
+
+        if opcode == 0x37:  # lui
+            if rd != 0:
+                registers[rd] = value & 0xFFFFF000
+        elif opcode == 0x13 and funct3 == 0:  # addi
+            source = registers[rs1]
+            registers[rd] = (None if source is None else
+                             (source + sign_extend(value >> 20, 12))
+                             & 0xFFFFFFFF)
+            registers[0] = 0
+        elif opcode == 0x5B and funct3 == 0 and funct7 == 0x10:
+            # csetaddr cd, cs1, rs2: only the resulting address matters.
+            if rd != 0:
+                registers[rd] = registers[rs2]
+        elif opcode == 0x5B and funct3 == 0 and funct7 == 0x01:
+            # cspecialrw cd, cSP, cs1 reads the old special-register value
+            # before optionally replacing it with cs1.
+            old_special = special_registers.get(rs2)
+            source = registers[rs1]
+            if rd != 0:
+                registers[rd] = old_special
+            if rs1 != 0:
+                special_registers[rs2] = source
+        elif opcode == 0x23 and funct3 == 0x2:  # sw rs2, imm(rs1)
+            base = registers[rs1]
+            immediate = ((value >> 25) << 5) | ((value >> 7) & 0x1F)
+            if base is None:
+                continue
+            address = (base + sign_extend(immediate, 12)) & 0xFFFFFFFF
+            if address != ADDATA_MARKER_ADDRESS:
+                continue
+            write_data = registers[rs2]
+            if write_data is None:
+                raise TraceError(
+                    "line {}: additional-data marker write has an unknown "
+                    "value".format(instruction.line_number)
+                )
+            marker_values.append(write_data)
+            if len(marker_values) == 2:
+                break
+
+    if len(marker_values) != 2:
+        raise TraceError(
+            "initial section has {} additional-data marker write(s); "
+            "expected 2".format(len(marker_values))
+        )
+
+    base = marker_values[0] & ~0x7
+    size = marker_values[1] & 0x3FF
+    if size == 0:
+        raise TraceError("additional-data entry count is zero")
+    if base + (size - 1) * 8 > 0xFFFFFFF8:
+        raise TraceError("additional-data area exceeds 32-bit addressing")
+    return base, size
+
+
 def is_jal_call(instruction):
     return (instruction.size == 4 and instruction.value & 0x7F == 0x6F
             and (instruction.value >> 7) & 0x1F == 1)
@@ -185,19 +270,27 @@ def mcycle_read_destination(instruction):
     return None
 
 
-def is_branch_sequence_start(instructions, index):
-    """Recognize `csrr tmp1, mcycle; andi tmp1, tmp1, mask`."""
-    if index + 1 >= len(instructions):
-        return False
-    destination = mcycle_read_destination(instructions[index])
-    if destination is None:
-        return False
-    andi_value = instructions[index + 1].value
-    return (instructions[index + 1].size == 4
+def branch_setup_registers(instructions, mcycle_index, setup_index):
+    """Return the branch operands for one marked setup pair, if valid."""
+    if setup_index + 1 >= len(instructions):
+        return None
+    lhs = mcycle_read_destination(instructions[mcycle_index])
+    if lhs is None:
+        return None
+
+    andi_value = instructions[setup_index].value
+    addi_value = instructions[setup_index + 1].value
+    if not (instructions[setup_index].size == 4
             and andi_value & 0x7F == 0x13
             and (andi_value >> 12) & 0x7 == 0x7
-            and (andi_value >> 7) & 0x1F == destination
-            and (andi_value >> 15) & 0x1F == destination)
+            and (andi_value >> 7) & 0x1F == lhs
+            and (andi_value >> 15) & 0x1F == lhs
+            and instructions[setup_index + 1].size == 4
+            and addi_value & 0x7F == 0x13
+            and (addi_value >> 12) & 0x7 == 0
+            and (addi_value >> 15) & 0x1F == 0):
+        return None
+    return lhs, (addi_value >> 7) & 0x1F
 
 
 def cspecialr_mtdc_destination(instruction):
@@ -310,24 +403,68 @@ def find_branch_sequences(instructions, subroutine):
     sequences = []
     index = subroutine.body_start
     while index < subroutine.body_end:
-        if not is_branch_sequence_start(instructions, index):
+        if mcycle_read_destination(instructions[index]) is None:
             index += 1
             continue
-        branch_index = None
-        for candidate in range(index + 1, subroutine.body_end):
+
+        mcycle_starts = []
+        candidate = index
+        while (candidate < subroutine.body_end and
+               mcycle_read_destination(instructions[candidate]) is not None):
+            mcycle_starts.append(candidate)
+            candidate += 1
+
+        setup_registers = []
+        for setup_number, mcycle_start in enumerate(mcycle_starts):
+            setup_index = candidate + 2 * setup_number
+            registers = branch_setup_registers(
+                instructions, mcycle_start, setup_index
+            )
+            if registers is None:
+                raise TraceError(
+                    "line {}: mcycle branch marker has an invalid setup "
+                    "pair".format(instructions[mcycle_start].line_number)
+                )
+            setup_registers.append(registers)
+        candidate += 2 * len(mcycle_starts)
+
+        branch_indices = []
+        while candidate < subroutine.body_end:
             if is_branch(instructions[candidate]):
-                branch_index = candidate
+                while (candidate < subroutine.body_end
+                       and is_branch(instructions[candidate])):
+                    branch_indices.append(candidate)
+                    candidate += 1
                 break
-            if is_branch_sequence_start(instructions, candidate):
+            if mcycle_read_destination(instructions[candidate]) is not None:
                 break
-        if branch_index is None:
+            candidate += 1
+
+        if len(branch_indices) != len(mcycle_starts):
             raise TraceError(
-                "line {}: branch sequence has no terminating branch".format(
-                    instructions[index].line_number
+                "line {}: branch group has {} setup block(s) but {} "
+                "terminating branch(es)".format(
+                    instructions[index].line_number,
+                    len(mcycle_starts),
+                    len(branch_indices),
                 )
             )
-        sequences.append(BranchSequence(index, branch_index))
-        index = branch_index + 1
+        for branch_index, (lhs, rhs) in zip(
+                branch_indices, setup_registers):
+            branch_value = instructions[branch_index].value
+            if ((branch_value >> 15) & 0x1F != lhs
+                    or (branch_value >> 20) & 0x1F != rhs):
+                raise TraceError(
+                    "line {}: terminating branch does not use its marked "
+                    "setup registers".format(
+                        instructions[branch_index].line_number
+                    )
+                )
+        sequences.extend(
+            BranchSequence(start, branch)
+            for start, branch in zip(mcycle_starts, branch_indices)
+        )
+        index = candidate
     return sequences
 
 
@@ -394,6 +531,8 @@ def assign_branch_targets(instructions, subroutines, rng):
         illegal = set()
         for sequence in subroutine.branches:
             illegal.update(range(sequence.start + 1, sequence.branch + 1))
+        # The first sequence's range covers later mcycle reads in the same
+        # group, leaving only the group's first mcycle read as a legal target.
         for sequence_start, sequence_end in legal_load_store_sequences(
                 instructions, subroutine):
             illegal.update(range(sequence_start + 1, sequence_end))
@@ -529,7 +668,7 @@ def make_string_table(strings):
     return bytes(data), offsets
 
 
-def write_elf(path, code, base_address, symbols):
+def write_elf(path, code, base_address, symbols, addata_info):
     # ELF32 little-endian RISC-V with code and exception-handler PT_LOADs.
     ehsize = 52
     phentsize = 32
@@ -549,8 +688,10 @@ def write_elf(path, code, base_address, symbols):
     symbol_names = [symbol[0] for symbol in symbols]
     strtab, string_offsets = make_string_table(symbol_names)
     shstrtab, section_offsets = make_string_table(
-        [".text", ".exception_handler", ".symtab", ".strtab", ".shstrtab"]
+        [".text", ".exception_handler", ".symtab", ".strtab",
+         ".addata_info", ".shstrtab"]
     )
+    addata_data = struct.pack("<II", *addata_info)
 
     symtab = bytearray(b"\0" * 16)
     for name, value, size, symbol_type in symbols:
@@ -563,16 +704,17 @@ def write_elf(path, code, base_address, symbols):
 
     symtab_offset = align(handler_offset + len(handler), 4)
     strtab_offset = symtab_offset + len(symtab)
-    shstrtab_offset = strtab_offset + len(strtab)
+    addata_offset = align(strtab_offset + len(strtab), 4)
+    shstrtab_offset = addata_offset + len(addata_data)
     shoff = align(shstrtab_offset + len(shstrtab), 4)
-    section_count = 6
+    section_count = 7
     file_size = shoff + section_count * shentsize
     image = bytearray(file_size)
 
     ident = b"\x7fELF" + bytes([1, 1, 1, 0, 0]) + b"\0" * 7
     image[:ehsize] = struct.pack(
         "<16sHHIIIIIHHHHHH", ident, 2, 243, 1, base_address, phoff,
-        shoff, 1, ehsize, phentsize, 2, shentsize, section_count, 5
+        shoff, 1, ehsize, phentsize, 2, shentsize, section_count, 6
     )
     image[phoff:phoff + phentsize] = struct.pack(
         "<IIIIIIII", 1, text_offset, base_address, base_address, len(code),
@@ -586,6 +728,7 @@ def write_elf(path, code, base_address, symbols):
     image[handler_offset:handler_offset + len(handler)] = handler
     image[symtab_offset:symtab_offset + len(symtab)] = symtab
     image[strtab_offset:strtab_offset + len(strtab)] = strtab
+    image[addata_offset:addata_offset + len(addata_data)] = addata_data
     image[shstrtab_offset:shstrtab_offset + len(shstrtab)] = shstrtab
 
     section_headers = [b"\0" * shentsize]
@@ -604,6 +747,10 @@ def write_elf(path, code, base_address, symbols):
     section_headers.append(struct.pack(
         "<IIIIIIIIII", section_offsets[".strtab"], 3, 0, 0,
         strtab_offset, len(strtab), 0, 0, 1, 0
+    ))
+    section_headers.append(struct.pack(
+        "<IIIIIIIIII", section_offsets[".addata_info"], 1, 0, 0,
+        addata_offset, len(addata_data), 0, 0, 4, 0
     ))
     section_headers.append(struct.pack(
         "<IIIIIIIIII", section_offsets[".shstrtab"], 3, 0, 0,
@@ -641,6 +788,7 @@ def process_trace(trace_path, elf_path, dot_path, base_address, rng, verbose):
     instructions = read_trace(trace_path)
     assign_addresses(instructions, base_address)
     main_loop_index = find_main_loop(instructions)
+    addata_info = find_addata_info(instructions, main_loop_index)
     subroutines = find_subroutines(instructions, main_loop_index)
     branch_symbols = assign_branch_targets(instructions, subroutines, rng)
     roots, edges = build_call_tree(
@@ -667,16 +815,20 @@ def process_trace(trace_path, elf_path, dot_path, base_address, rng, verbose):
 
     os.makedirs(os.path.dirname(elf_path), exist_ok=True)
     write_elf(
-        elf_path, instruction_bytes(instructions), base_address, symbols
+        elf_path, instruction_bytes(instructions), base_address, symbols,
+        addata_info
     )
     if dot_path:
         os.makedirs(os.path.dirname(dot_path), exist_ok=True)
         write_call_tree(dot_path, trace_stem(trace_path), roots, edges)
     if verbose:
-        print("  {}: {} instructions, {} subroutines, {} tree edges".format(
-            os.path.basename(trace_path), len(instructions), len(subroutines),
-            len(edges)
-        ))
+        print(
+            "  {}: {} instructions, {} subroutines, {} tree edges, "
+            "addata base 0x{:08x}, size {}".format(
+                os.path.basename(trace_path), len(instructions),
+                len(subroutines), len(edges), *addata_info
+            )
+        )
 
 
 def main(argv=None):

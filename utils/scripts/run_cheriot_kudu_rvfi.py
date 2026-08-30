@@ -48,6 +48,9 @@ SUPPORTED_CSR_ADDRESSES = frozenset({
     0xB00,
 }) | frozenset(range(0xBC5, 0xC00))
 
+REMOTE_VCS_DIR = Path("/mnt/svceng/riscdev/super/sim/run_dii")
+REMOTE_SSH_EXECUTABLE = Path("/mnt/c/Windows/System32/OpenSSH/ssh.exe")
+
 COMPARE_FIELDS = [
     "packet_num",
     "trap",
@@ -694,6 +697,63 @@ def run_simulations(root, dii_files, rvfi_max):
     return results_dir
 
 
+def run_remote_vcs_simulations(
+    root,
+    rvfi_max,
+    remote_target,
+    remote_dir=REMOTE_VCS_DIR,
+    ssh_executable=REMOTE_SSH_EXECUTABLE,
+):
+    run_dii_dir = (
+        root / "riscv-implementations" / "cheriot-kudu" / "sim" / "run_dii"
+    )
+    bin_dir = run_dii_dir / "bin"
+    elf_list = bin_dir / "elfs_no_conflict.list"
+    bin_archive = run_dii_dir / "bin.tar.gz"
+    results_dir = run_dii_dir / "results"
+    results_archive = run_dii_dir / "results.tar.gz"
+    remote_results_archive = remote_dir / "results.tar.gz"
+
+    require_dir(run_dii_dir, "Kudu VCS DII working directory")
+    require_dir(bin_dir, "Kudu VCS DII ELF directory")
+    require_file(elf_list, "conflict-free ELF list")
+    require_dir(remote_dir, "remote VCS transfer directory")
+
+    print("\nPackaging VCS inputs for remote simulation ...", flush=True)
+    run_cmd(["tar", "-czhf", bin_archive.name, bin_dir.name], cwd=run_dii_dir)
+    require_file(bin_archive, "VCS input archive")
+    run_cmd(["cp", bin_archive.name, str(remote_dir)], cwd=run_dii_dir)
+
+    remote_command = (
+        "zsh -lic 'cd ~/riscdev/super/sim/run_dii && "
+        "source ./load_module_vcs && "
+        "submit -i ./run_dii_rvfi.py --rvfi_max {} > /dev/null'"
+    ).format(rvfi_max)
+    print("\nRunning remote VCS simulation ...", flush=True)
+    run_cmd(
+        [
+            str(ssh_executable),
+            "-tt",
+            remote_target,
+            remote_command,
+        ],
+        cwd=run_dii_dir,
+    )
+
+    print("\nCopying remote VCS results back ...", flush=True)
+    require_file(remote_results_archive, "remote VCS results archive")
+    run_cmd(["cp", str(remote_results_archive), "."], cwd=run_dii_dir)
+    require_file(results_archive, "copied VCS results archive")
+
+    clean_dir(results_dir)
+    run_cmd(["tar", "-xzf", results_archive.name], cwd=run_dii_dir)
+    require_dir(results_dir, "extracted remote VCS results directory")
+    if not any(results_dir.glob("*.rvfi")):
+        raise RuntimeError("No *.rvfi files found in {}".format(results_dir))
+
+    return results_dir
+
+
 def find_sim_rvfi(results_dir, test_name):
     candidates = [
         results_dir / "{}.rvfi".format(test_name)
@@ -843,7 +903,7 @@ def main():
         dest="phase2_instr_count",
         type=int,
         default=None,
-        help="Phase-2 Sail instruction limit and Verilator +RVFI_MAX value. "
+        help="Phase-2 Sail instruction limit and Verilog +RVFI_MAX value. "
              "Default: phase1_instr_count",
     )
 
@@ -923,6 +983,14 @@ def main():
         choices=["cheriot", "rv32"],
         default="cheriot",
         help="Select CHERIoT Sail or standard RV32 sail-riscv. Default: cheriot",
+    )
+
+    parser.add_argument(
+        "--remote_vcs",
+        "--remote-vcs",
+        dest="remote_vcs",
+        metavar="[USER@]HOST",
+        help="Run the Verilog simulation remotely with VCS on [USER@]HOST",
     )
 
     relaxed_group = parser.add_mutually_exclusive_group()
@@ -1022,7 +1090,14 @@ def main():
         # ref_dir = prepare_ref_trace(root)
         dii_files = convert_elfs_to_dii(root)
 
-        results_dir = run_simulations(root, dii_files, args.phase2_instr_count)
+        if args.remote_vcs:
+            results_dir = run_remote_vcs_simulations(
+                root,
+                args.phase2_instr_count,
+                args.remote_vcs,
+            )
+        else:
+            results_dir = run_simulations(root, dii_files, args.phase2_instr_count)
 
         check_results(
             ref_dir,

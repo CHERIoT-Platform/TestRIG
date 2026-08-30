@@ -3,7 +3,7 @@
 ./run_sim.sh 100 --test caprevoke --case_cnt 10 --phase1_instr_count 10000 |egrep "PASS|STOP|building|verilog|run"
 ./run_sim.sh 100 -rv32 --test rv32mem --case_cnt 10  --phase1_instr_count 10000  |egrep "PASS|STOP|building|verilog|run"
 
-./run_sim.sh 100 --phase1_no_sail --case_cnt 10 --phase1_instr_count 1000 --phase2_instr_count 50000 |egrep "PASS|STOP|building|verilog|run"
+./run_sim.sh 100 --phase1_no_sail --case_cnt 10 --phase1_instr_count 3000 --phase2_instr_count 10000 |egrep "PASS|STOP|building|verilog|run"
 
 #random: rv32 random test, address wraparound issue.
 ./run_sim.sh 100 -rv32 --test random  |egrep "PASS|STOP|building|verilog|run"
@@ -16,4 +16,13 @@ utils/scripts/run_cheriot_kudu_rvfi.py --verilog_only
 utils/scripts/run_cheriot_kudu_rvfi.py --phase2_only
 utils/scripts/run_cheriot_kudu_rvfi.py --phase1_only
 utils/scripts/run_cheriot_kudu_rvfi.py --vengine_only
+
+--------------------------------------------------------
+Reserved addresses
+0x8000_0080: reset vector
+0x8300_0000: Shadow map memory
+0x807f_0000: exception handler
+0x808f_0000: stack base (for structured tests)
+0x00_______: MTDC (and used as addata base)
+0xffff_ff00: used to communicated to phase 1 sail and build_struct_elf about addata base & size
 
