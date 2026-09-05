@@ -675,6 +675,7 @@ def run_simulations(root, dii_files, rvfi_max):
         run_cmd([
             str(sim_exe),
             "+TEST={}".format(test_name),
+            "+BINDIR=../../../../two_phase_output/elfs",
             "+RVFI_MAX={}".format(rvfi_max),
             "+INSTR_GNT_WMAX={}".format(instr_gnt_wmax),
             "+INSTR_RESP_WMAX={}".format(instr_resp_wmax),
@@ -697,10 +698,20 @@ def run_simulations(root, dii_files, rvfi_max):
     return results_dir
 
 
+def make_remote_vcs_command(rvfi_max, sail_mode):
+    rv32_option = " --rv32" if sail_mode == "rv32" else ""
+    return (
+        "zsh -lic 'cd ~/riscdev/super/sim/run_dii && "
+        "source ./load_module_vcs && "
+        "submit -i ./run_dii_rvfi.py --rvfi_max {}{} > /dev/null'"
+    ).format(rvfi_max, rv32_option)
+
+
 def run_remote_vcs_simulations(
     root,
     rvfi_max,
     remote_target,
+    sail_mode,
     remote_dir=REMOTE_VCS_DIR,
     ssh_executable=REMOTE_SSH_EXECUTABLE,
 ):
@@ -724,11 +735,7 @@ def run_remote_vcs_simulations(
     require_file(bin_archive, "VCS input archive")
     run_cmd(["cp", bin_archive.name, str(remote_dir)], cwd=run_dii_dir)
 
-    remote_command = (
-        "zsh -lic 'cd ~/riscdev/super/sim/run_dii && "
-        "source ./load_module_vcs && "
-        "submit -i ./run_dii_rvfi.py --rvfi_max {} > /dev/null'"
-    ).format(rvfi_max)
+    remote_command = make_remote_vcs_command(rvfi_max, sail_mode)
     print("\nRunning remote VCS simulation ...", flush=True)
     run_cmd(
         [
@@ -1095,6 +1102,7 @@ def main():
                 root,
                 args.phase2_instr_count,
                 args.remote_vcs,
+                args.sail_mode,
             )
         else:
             results_dir = run_simulations(root, dii_files, args.phase2_instr_count)

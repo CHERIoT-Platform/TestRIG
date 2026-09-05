@@ -8,6 +8,8 @@
 #random: rv32 random test, address wraparound issue.
 ./run_sim.sh 100 -rv32 --test random  |egrep "PASS|STOP|building|verilog|run"
 
+./run_sim.sh 100 --remote_vcs kunyanliu@gem-cl03-fe-328.svceng.com --phase1_no_sail --case_cnt 10 --phase1_instr_count 3000 --phase2_instr_count 10000 |egrep "PASS|STOP|building|verilog|run"
+
 utils/scripts/run_cheriot_kudu_rvfi.py --case_cnt 1 --phase1_instr_count 1000
 utils/scripts/run_cheriot_kudu_rvfi.py --sail-mode rv32 --test rv32mem --case_cnt 1 --phase1_instr_count 2000
 
