@@ -49,19 +49,28 @@ randomizeIntRegs :: Template
 randomizeIntRegs =
   mconcat [prepReg32 reg | reg <- [1..15]]
 
+-- | Generate an arbitrary register index for full RV32I.
+fullIntReg :: Gen Integer
+fullIntReg = bits 5
+
+-- | Initialize all nonzero RV32I registers with random 32-bit values.
+randomizeFullIntRegs :: Template
+randomizeFullIntRegs =
+  mconcat [prepReg32 reg | reg <- [1..31]]
+
 -- | Generate one to three naturally aligned RV32 load, store, or AMO
 -- operations relative to a register initialized with 'baseOffset'.
 legalLoadStore :: Integer -> Template
 legalLoadStore baseOffset = readParams $ \params -> random $ do
   let desc = archDesc params
 
-  addrReg    <- suchThat src (/= 0)
-  amoAddrReg <- suchThat dest (\r -> r /= 0 && r /= addrReg)
+  addrReg    <- suchThat fullIntReg (/= 0)
+  amoAddrReg <- suchThat fullIntReg (\r -> r /= 0 && r /= addrReg)
   opCount    <- choose (1, 3)
 
   memOps <- fmap concat $ vectorOf opCount $ do
-    loadDest <- suchThat dest (/= addrReg)
-    storeData <- src
+    loadDest <- suchThat fullIntReg (/= addrReg)
+    storeData <- fullIntReg
     aq <- bits 1
     rl <- bits 1
 
@@ -125,9 +134,9 @@ genRandomLoadStoreTest :: Integer -> Template
 genRandomLoadStoreTest baseOffset = readParams $ \params -> random $ do
   let desc = archDesc params
 
-  src1    <- src
-  src2    <- src
-  destReg <- dest
+  src1    <- fullIntReg
+  src2    <- fullIntReg
+  destReg <- fullIntReg
   imm     <- bits 12
   longImm <- bits 20
 
@@ -136,7 +145,7 @@ genRandomLoadStoreTest baseOffset = readParams $ \params -> random $ do
     , (if has_m desc then 20 else 0,
        instUniform $ rv32_m src1 src2 destReg)
     , (10, legalLoadStore baseOffset)
-    , (1, randomizeIntRegs)
+    , (1, randomizeFullIntRegs)
     ]
 
 -- | Random RV32IM/A arithmetic and memory test with a test-wide base address.
@@ -147,7 +156,7 @@ randomLoadStoreTest = random $ do
   let baseOffset = 0x08000000 + 4 * low22
 
   return $
-    randomizeIntRegs <> repeatTillEnd (genRandomLoadStoreTest baseOffset)
+    randomizeFullIntRegs <> repeatTillEnd (genRandomLoadStoreTest baseOffset)
 
 -- | 'randomTest' provides a 'Template' for a random test
 randomTest :: Template

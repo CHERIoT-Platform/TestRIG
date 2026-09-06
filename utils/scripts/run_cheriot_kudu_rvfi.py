@@ -641,7 +641,7 @@ def convert_elfs_to_dii(root):
     return dii_files
 
 
-def run_simulations(root, dii_files, rvfi_max):
+def run_simulations(root, dii_files, rvfi_max, sail_mode):
     verilator_dir = root / "riscv-implementations" / "cheriot-kudu" / "sim" / "verilator"
     sim_exe = verilator_dir / "obj_dir" / "Vtb_kudu_top"
     results_dir = verilator_dir / "results"
@@ -672,7 +672,7 @@ def run_simulations(root, dii_files, rvfi_max):
             if stale.exists():
                 stale.unlink()
 
-        run_cmd([
+        sim_args = [
             str(sim_exe),
             "+TEST={}".format(test_name),
             "+BINDIR=../../../../two_phase_output/elfs",
@@ -681,7 +681,12 @@ def run_simulations(root, dii_files, rvfi_max):
             "+INSTR_RESP_WMAX={}".format(instr_resp_wmax),
             "+DATA_GNT_WMAX={}".format(data_gnt_wmax),
             "+DATA_RESP_WMAX={}".format(data_resp_wmax),
-        ],
+        ]
+        if sail_mode == "rv32":
+            sim_args.append("+PMODE=0")
+
+        run_cmd(
+            sim_args,
             cwd=verilator_dir,
             quiet=True,
         )
@@ -1105,7 +1110,12 @@ def main():
                 args.sail_mode,
             )
         else:
-            results_dir = run_simulations(root, dii_files, args.phase2_instr_count)
+            results_dir = run_simulations(
+                root,
+                dii_files,
+                args.phase2_instr_count,
+                args.sail_mode,
+            )
 
         check_results(
             ref_dir,

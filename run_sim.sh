@@ -174,12 +174,7 @@ else
   (
     cd riscv-implementations/cheriot-kudu/sim/verilator || exit 1
 
-    if [ "$RV32" -eq 1 ]; then
-      ./vgen -dii -rv32 || exit $?
-    else
-      ./vgen -dii || exit $?
-    fi
-
+    ./vgen -dii || exit $?
     ./vcomp
   )
   build_rc=$?
