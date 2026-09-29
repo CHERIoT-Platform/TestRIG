@@ -174,8 +174,7 @@ else
   (
     cd riscv-implementations/cheriot-kudu/sim/verilator || exit 1
 
-    ./vgen -dii || exit $?
-    ./vcomp
+    ./vericomp -dii || exit $?
   )
   build_rc=$?
 
