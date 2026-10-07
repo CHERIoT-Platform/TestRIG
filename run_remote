@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  echo "Usage: $0 [-v|--verbose] [RUN_COUNT] [HOST]"
+  echo "  -v, --verbose"
+  echo "             Show complete run_sim.sh output instead of filtering it"
+  echo "  RUN_COUNT  Number of wrapper runs passed to run_sim.sh (default: 1000)"
+  echo "  HOST       Remote VCS host (default: gem-cl03-fe-328.svceng.com)"
+}
+
+VERBOSE=0
+POSITIONAL_ARGS=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -v|--verbose)
+      VERBOSE=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "ERROR: unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      ;;
+  esac
+  shift
+done
+
+if [ "${#POSITIONAL_ARGS[@]}" -gt 2 ]; then
+  echo "ERROR: expected at most RUN_COUNT and HOST" >&2
+  usage >&2
+  exit 2
+fi
+
+RUN_COUNT="${POSITIONAL_ARGS[0]:-1000}"
+HOST="${POSITIONAL_ARGS[1]:-gem-cl03-fe-328.svceng.com}"
+REMOTE_VCS_TARGET="kunyanliu@${HOST}"
+OUTPUT_PATTERN="PASS|STOP|building|verilog|run"
+
+if [[ "$HOST" =~ [@[:space:]] ]]; then
+  echo "ERROR: HOST must be a host name without a user name or whitespace" >&2
+  exit 2
+fi
+
+if ! [[ "$RUN_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: RUN_COUNT must be a positive integer" >&2
+  exit 2
+fi
+
+run_remote() {
+  if [ "$VERBOSE" -eq 1 ]; then
+    ./run_sim.sh "$RUN_COUNT" --remote_vcs "$REMOTE_VCS_TARGET" "$@"
+  else
+    ./run_sim.sh "$RUN_COUNT" --remote_vcs "$REMOTE_VCS_TARGET" "$@" |
+      grep -E "$OUTPUT_PATTERN"
+  fi
+}
+
+run_remote --phase1_no_sail --case_cnt 10 \
+  --phase1_instr_count 3000 --phase2_instr_count 10000
+run_remote
+run_remote --test caparith --case_cnt 10 --phase1_instr_count 20000
+run_remote --test caprevoke --case_cnt 10 --phase1_instr_count 10000
+run_remote -rv32 --test rv32mem --case_cnt 10 --phase1_instr_count 10000
